@@ -36,6 +36,7 @@ add_library(ftxui-ext STATIC
     src/file_source.cc
     src/md/parser.cc
     src/md/render.cc
+    src/org/render.cc
 )
 target_include_directories(ftxui-ext PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(ftxui-ext PUBLIC dom component screen)
