@@ -284,7 +284,9 @@ namespace ftxui::ext::org
         for (const Block& block : doc.blocks)
         {
             ++index;
-            if (!rows.empty())
+            // spacing follows the source: only blocks the source separated
+            // with a blank line get one (markdown always spaces its blocks)
+            if (!rows.empty() && block.gap)
                 rows.push_back({ftxui::text(""), 1, index, false, false});
             switch (block.kind)
             {

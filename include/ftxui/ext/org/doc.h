@@ -78,6 +78,11 @@ namespace ftxui::ext::org
     {
         BlockKind kind = BlockKind::Paragraph;
         int level = 0;                       // Headline
+        // True when a blank line separates this block from the previous one
+        // in the source; the renderer only inserts spacing then, so org
+        // documents keep their source rhythm (no gap between a headline and
+        // its planning line, unlike markdown's always-spaced blocks).
+        bool gap = false;
         std::vector<Inline> spans;           // Headline/Paragraph/Quote/Keyword/Planning/Clock
         std::vector<TableCell> headers;      // Table (first row)
         std::vector<std::vector<TableCell>> rows;
