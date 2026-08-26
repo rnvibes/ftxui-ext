@@ -72,7 +72,7 @@ namespace ftxui::ext
 
     // Plain-string word wrap, used where the content is measured in columns
     // (table cells) rather than styled word by word.
-    inline std::vector<std::string> wrap_plain(const std::string& text, int width)
+    inline std::vector<std::string> wrap_plain(std::string_view text, int width)
     {
         std::vector<std::string> lines;
         std::string line;
@@ -85,10 +85,10 @@ namespace ftxui::ext
             std::size_t end = text.find(' ', start);
             if (end == std::string::npos)
                 end = text.size();
-            const std::string word = text.substr(start, end - start);
+            const std::string word(text.substr(start, end - start));
             const int w = static_cast<int>(ftxui::string_width(word));
             if (!line.empty() &&
-                static_cast<int>(ftxui::string_width(line)) + 1 + w > width)
+                static_cast<int>(ftxui::string_width(std::string(line))) + 1 + w > width)
             {
                 lines.push_back(line);
                 line.clear();
@@ -186,7 +186,7 @@ namespace ftxui::ext
     // body, wrap-or-truncate handling) shared by the markdown and org
     // renderers so code looks identical everywhere.
     inline std::vector<ftxui::Element> code_box(
-        const std::string& literal, const std::string& language, int width,
+        std::string_view literal, std::string_view language, int width,
         bool wrap, bool& truncated, ftxui::Color border, ftxui::Color code_fg,
         ftxui::Color code_bg, ftxui::Color truncation,
         const ftxui::ext::SyntaxStyle& syntax_style)
@@ -197,7 +197,7 @@ namespace ftxui::ext
 
         std::string top = "╭";
         if (!language.empty())
-            top += " " + language + " ";
+            top += " " + std::string(language) + " ";
         while (static_cast<int>(ftxui::string_width(top)) < outer - 1)
             top += "─";
         top += "╮";
@@ -214,7 +214,7 @@ namespace ftxui::ext
 
     struct StyledToken
     {
-        std::string text;
+        std::string_view text;
         ftxui::Decorator style;
     };
 
@@ -229,7 +229,7 @@ namespace ftxui::ext
             {
                 const std::size_t nl = literal.find('\n', start);
                 const std::size_t line_end = nl == std::string::npos ? literal.size() : nl;
-                const std::string line = literal.substr(start, line_end - start);
+                const std::string_view line = literal.substr(start, line_end - start);
 
                 // Collect tokens for this line
                 std::vector<StyledToken> line_tokens;
@@ -289,7 +289,7 @@ namespace ftxui::ext
                     // Break styled tokens into words / printable units
                     struct Atom
                     {
-                        std::string text;
+                        std::string_view text;
                         ftxui::Decorator style;
                         int width;
                     };
@@ -304,7 +304,7 @@ namespace ftxui::ext
                             {
                                 size_t sp_end = tok.text.find_first_not_of(' ', i);
                                 if (sp_end == std::string::npos) sp_end = tok.text.size();
-                                std::string sp_str = tok.text.substr(i, sp_end - i);
+                                const std::string_view sp_str = tok.text.substr(i, sp_end - i);
                                 atoms.push_back({sp_str, tok.style, static_cast<int>(sp_str.size())});
                                 i = sp_end;
                             }
@@ -312,8 +312,8 @@ namespace ftxui::ext
                             {
                                 size_t w_end = tok.text.find(' ', i);
                                 if (w_end == std::string::npos) w_end = tok.text.size();
-                                std::string w_str = tok.text.substr(i, w_end - i);
-                                atoms.push_back({w_str, tok.style, static_cast<int>(ftxui::string_width(w_str))});
+                                const std::string_view w_str = tok.text.substr(i, w_end - i);
+                                atoms.push_back({w_str, tok.style, static_cast<int>(ftxui::string_width(std::string(w_str)))});
                                 i = w_end;
                             }
                         }
@@ -347,14 +347,14 @@ namespace ftxui::ext
                                 const auto &atom = atoms[atom_i];
                                 if (used + atom.width <= budget)
                                 {
-                                    line_elems.push_back(ftxui::text(atom.text) | atom.style);
+                                    line_elems.push_back(ftxui::text(std::string(atom.text)) | atom.style);
                                     used += atom.width;
                                     ++atom_i;
                                 }
                                 else if (used == 0 && atom.width > budget)
                                 {
                                     // Split oversized single word
-                                    std::string cut = atom.text;
+                                    std::string cut(atom.text);
                                     while (!cut.empty() && static_cast<int>(ftxui::string_width(cut)) > budget)
                                     {
                                         cut.pop_back();
@@ -363,7 +363,7 @@ namespace ftxui::ext
                                     line_elems.push_back(ftxui::text(cut) | atom.style);
                                     used += cut_w;
                                     atoms[atom_i].text = atom.text.substr(cut.size());
-                                    atoms[atom_i].width = static_cast<int>(ftxui::string_width(atoms[atom_i].text));
+                                    atoms[atom_i].width = static_cast<int>(ftxui::string_width(std::string(atoms[atom_i].text)));
                                     break;
                                 }
                                 else
@@ -384,7 +384,7 @@ namespace ftxui::ext
                 }
                 else
                 {
-                    int line_width = static_cast<int>(ftxui::string_width(line));
+                    int line_width = static_cast<int>(ftxui::string_width(std::string(line)));
                     if (line_width > inner)
                     {
                         truncated = true;
@@ -392,15 +392,15 @@ namespace ftxui::ext
                         int cur_w = 0;
                         for (const auto &tok : line_tokens)
                         {
-                            const int tok_w = static_cast<int>(ftxui::string_width(tok.text));
+                            const int tok_w = static_cast<int>(ftxui::string_width(std::string(tok.text)));
                             if (cur_w + tok_w <= inner - 1)
                             {
-                                line_elems.push_back(ftxui::text(tok.text) | tok.style);
+                                line_elems.push_back(ftxui::text(std::string(tok.text)) | tok.style);
                                 cur_w += tok_w;
                             }
                             else
                             {
-                                std::string cut = tok.text;
+                                std::string cut(tok.text);
                                 while (!cut.empty() && cur_w + static_cast<int>(ftxui::string_width(cut)) > inner - 1)
                                 {
                                     cut.pop_back();
@@ -420,7 +420,7 @@ namespace ftxui::ext
                         Elements line_elems;
                         for (const auto &tok : line_tokens)
                         {
-                            line_elems.push_back(ftxui::text(tok.text) | tok.style);
+                            line_elems.push_back(ftxui::text(std::string(tok.text)) | tok.style);
                         }
                         const int pad = inner - line_width;
                         if (pad > 0)

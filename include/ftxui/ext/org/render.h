@@ -33,7 +33,7 @@ namespace ftxui::ext::org
     // Pure document -> rows. Table cells wrap within their columns; prose
     // wraps to the viewport width; code is a bordered box (truncated unless
     // wrap_code).
-    std::vector<Row> render_rows(const Document& doc, const Theme& theme,
+    std::vector<Row> render_rows(const OrgDocument& doc, const Theme& theme,
                                  int viewport_width, RenderOptions options = {});
 
 } // namespace ftxui::ext::org

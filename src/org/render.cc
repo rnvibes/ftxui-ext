@@ -82,8 +82,9 @@ namespace ftxui::ext::org
             return ftxui::nothing;
         }
 
-        // Append the whitespace-separated words of one text run.
-        void push_words(std::vector<Word>& out, const std::string& text, Decorator style)
+        // Append the whitespace-separated words of one text run. The text
+        // is a view (source or arena); words are copied for ftxui.
+        void push_words(std::vector<Word>& out, std::string_view text, Decorator style)
         {
             std::size_t i = 0;
             while (i < text.size())
@@ -94,12 +95,12 @@ namespace ftxui::ext::org
                 std::size_t end = text.find_first_of(" \t\n", start);
                 if (end == std::string::npos)
                     end = text.size();
-                out.push_back({text.substr(start, end - start), style});
+                out.push_back({std::string(text.substr(start, end - start)), style});
                 i = end;
             }
         }
 
-        std::vector<Word> words_of(const std::vector<Inline>& spans, const Theme& theme)
+        std::vector<Word> words_of(const std::pmr::vector<Inline>& spans, const Theme& theme)
         {
             std::vector<Word> out;
             for (const Inline& span : spans)
@@ -109,8 +110,8 @@ namespace ftxui::ext::org
 
         // Headline words: plain text gets the md heading treatment (bold +
         // level color); component words keep their own colors.
-        std::vector<Word> headline_words(const std::vector<Inline>& spans, const Theme& theme,
-                                         ftxui::Color color)
+        std::vector<Word> headline_words(const std::pmr::vector<Inline>& spans,
+                                     const Theme& theme, ftxui::Color color)
         {
             std::vector<Word> out;
             for (const Inline& span : spans)
@@ -161,17 +162,17 @@ namespace ftxui::ext::org
                 computed.push_back({});
                 for (const TableCell& cell : block.headers)
                 {
-                    grid.back().push_back(cell.text);
+                    grid.back().push_back(std::string(cell.text));
                     computed.back().push_back(cell.computed);
                 }
             }
-            for (const std::vector<TableCell>& row : block.rows)
+            for (const std::pmr::vector<TableCell>& row : block.rows)
             {
                 grid.push_back({});
                 computed.push_back({});
                 for (const TableCell& cell : row)
                 {
-                    grid.back().push_back(cell.text);
+                    grid.back().push_back(std::string(cell.text));
                     computed.back().push_back(cell.computed);
                 }
             }
@@ -237,13 +238,13 @@ namespace ftxui::ext::org
             Elements rows;
             for (const ListItem& item : block.items)
             {
-                const int indent = static_cast<int>(ftxui::string_width(item.marker));
+                const int indent = static_cast<int>(ftxui::string_width(std::string(item.marker)));
                 Elements wrapped = wrap_words(words_of(item.spans, theme), width - indent);
                 for (std::size_t i = 0; i < wrapped.size(); ++i)
                 {
                     Element lead =
                         i == 0
-                            ? ftxui::text(item.marker) | ftxui::bold |
+                            ? ftxui::text(std::string(item.marker)) | ftxui::bold |
                                   ftxui::color(theme.list_marker)
                             : ftxui::text(std::string(static_cast<std::size_t>(indent), ' '));
                     rows.push_back(ftxui::hbox({std::move(lead), std::move(wrapped[i])}));
@@ -270,7 +271,7 @@ namespace ftxui::ext::org
 
     } // namespace
 
-    std::vector<Row> render_rows(const Document& doc, const Theme& theme,
+    std::vector<Row> render_rows(const OrgDocument& doc, const Theme& theme,
                                  int viewport_width, RenderOptions options)
     {
         std::vector<Row> rows;
