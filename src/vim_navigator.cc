@@ -192,6 +192,10 @@ namespace ftxui::ext
     {
       action = VimAction::Activate;
     }
+    else if (event == ftxui::Event::CtrlE)
+    {
+      action = VimAction::Elaborate;
+    }
 
     if (!action)
       return std::nullopt;

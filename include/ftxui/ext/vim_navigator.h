@@ -34,6 +34,7 @@ namespace ftxui::ext
     CloseFold,        // zc
     EnterCommandMode, // : — hands off to the app's `:command arg` line
     Activate,         // Enter / o — open whatever the cursor is on
+    Elaborate,        // <C-e> — contextual inquiry / follow-up
     // <C-w>h/j/k/l — move focus between tiles. Vim's window vocabulary, and
     // the reason Tab is gone: a tiled layout has directions, and a ring does
     // not, so cycling was always a worse answer to "go left".
