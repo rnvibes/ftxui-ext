@@ -1,6 +1,7 @@
 #include "ftxui/ext/md/render.h"
 
 #include "ftxui/ext/latex_math.h"
+#include "ftxui/ext/text_layout.h"
 
 #include <ftxui/screen/string.hpp>
 
@@ -15,12 +16,7 @@ namespace ftxui::ext::md
         using ftxui::Decorator;
         using ftxui::Element;
         using ftxui::Elements;
-
-        struct Word
-        {
-            std::string text;
-            Decorator style;
-        };
+        using ftxui::ext::Word;
 
         Decorator style_for(const Inline &span, const Theme &theme)
         {
@@ -72,47 +68,8 @@ namespace ftxui::ext::md
             return words;
         }
 
-        // A multi-row block (a bordered code box, a stacked equation) is one
-        // Element, so the only way to line a gutter up with what follows is to
-        // ask the node how tall it intends to be. Layout re-runs this during
-        // the real render pass; calling it early is measurement, not a draw.
-        int height_of(const Element &element)
-        {
-            element->ComputeRequirement();
-            return std::max(element->requirement().min_y, 1);
-        }
-
-        // Greedy wrap. Each row is an hbox so neighbouring words keep their own
-        // styles instead of collapsing into one decorated string.
-        Elements wrap(std::vector<Word> words, int width)
-        {
-            width = std::max(width, 8);
-            Elements rows;
-            Elements row;
-            int used = 0;
-            for (Word &word : words)
-            {
-                const int w = static_cast<int>(ftxui::string_width(word.text));
-                if (!row.empty() && used + 1 + w > width)
-                {
-                    rows.push_back(ftxui::hbox(std::move(row)));
-                    row.clear();
-                    used = 0;
-                }
-                if (!row.empty())
-                {
-                    row.push_back(ftxui::text(" "));
-                    used += 1;
-                }
-                row.push_back(ftxui::text(word.text) | word.style);
-                used += w;
-            }
-            if (!row.empty())
-                rows.push_back(ftxui::hbox(std::move(row)));
-            if (rows.empty())
-                rows.push_back(ftxui::text(""));
-            return rows;
-        }
+        // Greedy wrap and element-height measurement come from the shared
+        // text_layout.h so the org renderer lays text out identically.
 
         Elements render_heading(const Block &block, const Theme &theme, int width)
         {
@@ -122,42 +79,12 @@ namespace ftxui::ext::md
             std::vector<Word> words = words_of(block.spans, theme);
             for (Word &word : words)
                 word.style = ftxui::bold | ftxui::color(color);
-            Elements rows = wrap(std::move(words), width);
+            Elements rows = wrap_words(std::move(words), width);
             if (block.level <= 1)
                 rows.push_back(ftxui::separator() | ftxui::color(color));
             return rows;
         }
 
-        std::vector<std::string> wrap_plain(const std::string &text, int width)
-        {
-            std::vector<std::string> lines;
-            std::string line;
-            std::size_t i = 0;
-            while (i < text.size())
-            {
-                const std::size_t start = text.find_first_not_of(' ', i);
-                if (start == std::string::npos)
-                    break;
-                std::size_t end = text.find(' ', start);
-                if (end == std::string::npos)
-                    end = text.size();
-                const std::string word = text.substr(start, end - start);
-                const int w = static_cast<int>(ftxui::string_width(word));
-                if (!line.empty() &&
-                    static_cast<int>(ftxui::string_width(line)) + 1 + w > width)
-                {
-                    lines.push_back(line);
-                    line.clear();
-                }
-                if (!line.empty())
-                    line += ' ';
-                line += word;
-                i = end;
-            }
-            if (!line.empty() || lines.empty())
-                lines.push_back(line);
-            return lines;
-        }
 
         struct StyledToken
         {
@@ -433,84 +360,6 @@ namespace ftxui::ext::md
             return out;
         }
 
-        // Column sizing, ported from the renderer this replaced: measure the
-        // natural width, shave the widest column (never below its longest
-        // single word, which is the narrowest a column can get without
-        // clipping), then grow proportionally to span the pane — otherwise a
-        // short table leaves a ragged gap instead of filling like every other
-        // block does.
-        std::vector<int> column_widths(const std::vector<std::vector<std::string>> &grid,
-                                       std::size_t columns, int budget)
-        {
-            std::vector<int> natural(columns, 0), floor_width(columns, 1);
-            for (const auto &row : grid)
-            {
-                for (std::size_t i = 0; i < columns; ++i)
-                {
-                    natural[i] = std::max(natural[i],
-                                          static_cast<int>(ftxui::string_width(row[i])));
-                    for (const std::string &word : wrap_plain(row[i], 1))
-                        floor_width[i] = std::max(floor_width[i],
-                                                  static_cast<int>(ftxui::string_width(word)));
-                }
-            }
-
-            std::vector<int> width = natural;
-            const int padding = static_cast<int>(columns) * 2;
-            int total = padding;
-            for (int w : width)
-                total += w;
-
-            // Two passes: the first only takes from columns still above their
-            // floor, so prose gives way before short label columns. If the
-            // floors alone still overflow, the second shaves anyway rather
-            // than letting the table run past the pane and get clipped.
-            for (int pass = 0; pass < 2 && total > budget; ++pass)
-            {
-                const bool respect_floor = pass == 0;
-                while (total > budget)
-                {
-                    int victim = -1, widest = 0;
-                    for (std::size_t i = 0; i < columns; ++i)
-                    {
-                        const int floor = respect_floor ? floor_width[i] : 1;
-                        if (width[i] > floor && width[i] > widest)
-                        {
-                            widest = width[i];
-                            victim = static_cast<int>(i);
-                        }
-                    }
-                    if (victim < 0)
-                        break;
-                    --width[static_cast<std::size_t>(victim)];
-                    --total;
-                }
-            }
-
-            if (total < budget)
-            {
-                int extra = budget - total, natural_sum = 0, given = 0;
-                for (int w : natural)
-                    natural_sum += w;
-                for (std::size_t i = 0; i < columns; ++i)
-                {
-                    const int share = natural_sum > 0
-                                          ? (extra * natural[i]) / natural_sum
-                                          : extra / static_cast<int>(columns);
-                    width[i] += share;
-                    given += share;
-                }
-                if (given < extra)
-                {
-                    std::size_t widest = 0;
-                    for (std::size_t i = 1; i < columns; ++i)
-                        if (width[i] > width[widest])
-                            widest = i;
-                    width[widest] += extra - given;
-                }
-            }
-            return width;
-        }
 
         // One unit per table row (plus the header and its rule), so the
         // cursor can step across a table and every row carries its own
@@ -541,7 +390,7 @@ namespace ftxui::ext::md
                 grid.push_back(flatten_row(row));
 
             const std::vector<int> widths =
-                column_widths(grid, columns, std::max(width, 20));
+                table_column_widths(grid, columns, std::max(width, 20));
 
             auto row_element = [&](const std::vector<std::string> &cells, bool header)
             {
@@ -607,7 +456,7 @@ namespace ftxui::ext::md
                 const std::string marker =
                     block.ordered ? std::to_string(number++) + ". " : "• ";
                 const int indent = static_cast<int>(ftxui::string_width(marker));
-                Elements wrapped = wrap(words_of(item, theme), width - indent);
+                Elements wrapped = wrap_words(words_of(item, theme), width - indent);
                 for (std::size_t i = 0; i < wrapped.size(); ++i)
                 {
                     Element lead = i == 0
@@ -627,7 +476,7 @@ namespace ftxui::ext::md
             std::vector<Word> words = words_of(block.spans, theme);
             for (Word &word : words)
                 word.style = ftxui::italic | ftxui::color(theme.blockquote);
-            for (Element &line : wrap(std::move(words), width - 2))
+            for (Element &line : wrap_words(std::move(words), width - 2))
             {
                 rows.push_back(ftxui::hbox({
                     ftxui::text("│ ") | ftxui::bold | ftxui::color(theme.blockquote),
@@ -651,7 +500,7 @@ namespace ftxui::ext::md
         };
         auto push_block = [&](Element element, bool truncated = false)
         {
-            const int height = height_of(element);
+            const int height = element_height(element);
             rows.push_back({std::move(element), height, index, truncated});
         };
 
@@ -696,7 +545,7 @@ namespace ftxui::ext::md
                 rows.push_back({ftxui::separator() | ftxui::color(theme.border), 1, index, false});
                 break;
             case BlockKind::Paragraph:
-                push_lines(wrap(words_of(block.spans, theme), viewport_width));
+                push_lines(wrap_words(words_of(block.spans, theme), viewport_width));
                 break;
             }
         }
