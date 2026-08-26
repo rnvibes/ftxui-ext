@@ -28,7 +28,7 @@ namespace ftxui::ext
         int content = 0;  ///< total rows of content
         int viewport = 0; ///< rows visible at once
         int scroll = 0;   ///< first visible row
-        int width = 2;    ///< columns; two reads as a bar, one as a border
+        int width = 1;    ///< columns; one matches the thin scrollbars across all panels
 
         [[nodiscard]] int max_scroll() const { return std::max(content - viewport, 0); }
         [[nodiscard]] bool scrollable() const { return max_scroll() > 0 && viewport > 0; }
