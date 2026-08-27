@@ -32,7 +32,7 @@ namespace ftxui::ext
             return false;
         }
 
-        std::string SpansToText(const std::vector<md::Inline> &spans)
+        std::string SpansToText(const std::vector<MdInline> &spans)
         {
             std::string result;
             for (const auto &span : spans)
@@ -137,7 +137,7 @@ namespace ftxui::ext
         return sentences.back();
     }
 
-    std::string FormatTableBlock(const md::Block &block)
+    std::string FormatTableBlock(const MdBlock &block)
     {
         if (block.headers.empty() && block.rows.empty())
             return "";
@@ -163,7 +163,7 @@ namespace ftxui::ext
         return oss.str();
     }
 
-    std::string FormatCodeBlock(const md::Block &block)
+    std::string FormatCodeBlock(const MdBlock &block)
     {
         std::string res = "```" + block.language + "\n";
         res += block.literal;
@@ -173,7 +173,7 @@ namespace ftxui::ext
         return res;
     }
 
-    std::string FormatMathBlock(const md::Block &block)
+    std::string FormatMathBlock(const MdBlock &block)
     {
         std::string res = "$$\n" + block.literal;
         if (res.empty() || res.back() != '\n')
@@ -182,17 +182,17 @@ namespace ftxui::ext
         return res;
     }
 
-    ExtractedContext ExtractBlockContext(const md::Block &block, std::size_t char_index, int item_index)
+    ExtractedContext ExtractBlockContext(const MdBlock &block, std::size_t char_index, int item_index)
     {
         switch (block.kind)
         {
-        case md::BlockKind::Table:
+        case MdBlockKind::Table:
             return {FormatTableBlock(block), 0, 0};
-        case md::BlockKind::CodeBlock:
+        case MdBlockKind::CodeBlock:
             return {FormatCodeBlock(block), 0, 0};
-        case md::BlockKind::Math:
+        case MdBlockKind::Math:
             return {FormatMathBlock(block), 0, 0};
-        case md::BlockKind::List:
+        case MdBlockKind::List:
         {
             if (item_index >= 0 && static_cast<std::size_t>(item_index) < block.items.size())
             {
@@ -211,10 +211,10 @@ namespace ftxui::ext
             }
             return {res, 0, 0};
         }
-        case md::BlockKind::Paragraph:
-        case md::BlockKind::Heading:
-        case md::BlockKind::Blockquote:
-        case md::BlockKind::Rule:
+        case MdBlockKind::Paragraph:
+        case MdBlockKind::Heading:
+        case MdBlockKind::Blockquote:
+        case MdBlockKind::Rule:
         default:
         {
             std::string text = SpansToText(block.spans);

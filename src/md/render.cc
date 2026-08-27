@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <utility>
 
-namespace ftxui::ext::md
+namespace ftxui::ext
 {
     namespace
     {
@@ -18,37 +18,37 @@ namespace ftxui::ext::md
         using ftxui::Elements;
         using ftxui::ext::Word;
 
-        Decorator style_for(const Inline &span, const Theme &theme)
+        Decorator style_for(const MdInline &span, const MdTheme &theme)
         {
             switch (span.kind)
             {
-            case InlineKind::Bold:
+            case MdInlineKind::Bold:
                 return ftxui::bold | ftxui::color(theme.bold_fg);
-            case InlineKind::Italic:
+            case MdInlineKind::Italic:
                 return ftxui::italic | ftxui::color(theme.italic_fg);
-            case InlineKind::Code:
+            case MdInlineKind::Code:
                 return ftxui::color(theme.code_fg) | ftxui::bgcolor(theme.code_bg);
-            case InlineKind::Math:
+            case MdInlineKind::Math:
                 return ftxui::color(span.emphasized ? theme.math_emphasis : theme.math_fg);
-            case InlineKind::Text:
+            case MdInlineKind::Text:
                 break;
             }
             return ftxui::nothing;
         }
 
-        // Inline math is flattened to a single row of terminal glyphs here so it
+        // MdInline math is flattened to a single row of terminal glyphs here so it
         // wraps as ordinary words; only display math keeps the 2D stacked layout.
-        std::string inline_text(const Inline &span)
+        std::string inline_text(const MdInline &span)
         {
-            if (span.kind != InlineKind::Math)
+            if (span.kind != MdInlineKind::Math)
                 return span.text;
             return ftxui::ext::substitute_inline_math("$" + span.text + "$");
         }
 
-        std::vector<Word> words_of(const std::vector<Inline> &spans, const Theme &theme)
+        std::vector<Word> words_of(const std::vector<MdInline> &spans, const MdTheme &theme)
         {
             std::vector<Word> words;
-            for (const Inline &span : spans)
+            for (const MdInline &span : spans)
             {
                 const Decorator style = style_for(span, theme);
                 const std::string text = inline_text(span);
@@ -71,7 +71,7 @@ namespace ftxui::ext::md
         // Greedy wrap and element-height measurement come from the shared
         // text_layout.h so the org renderer lays text out identically.
 
-        Elements render_heading(const Block &block, const Theme &theme, int width)
+        Elements render_heading(const MdBlock &block, const MdTheme &theme, int width)
         {
             const ftxui::Color color = block.level <= 1   ? theme.heading1
                                        : block.level == 2 ? theme.heading2
@@ -92,7 +92,7 @@ namespace ftxui::ext::md
         // block occupies gets its own gutter number. A single opaque element
         // would leave blanks in the number line, and relative numbers stop
         // being arithmetic you can trust the moment that happens.
-        Elements render_code(const Block &block, const Theme &theme, int width,
+        Elements render_code(const MdBlock &block, const MdTheme &theme, int width,
                              bool wrap, bool &truncated)
         {
             // the bordered box is shared with the org renderer
@@ -104,10 +104,10 @@ namespace ftxui::ext::md
 
         // Flatten a cell to plain text: a table cell is measured in columns, so
         // inline math has to become glyphs before any width arithmetic.
-        std::string flatten(const std::vector<Inline> &spans)
+        std::string flatten(const std::vector<MdInline> &spans)
         {
             std::string out;
-            for (const Inline &span : spans)
+            for (const MdInline &span : spans)
                 out += inline_text(span);
             return out;
         }
@@ -117,8 +117,8 @@ namespace ftxui::ext::md
         // cursor can step across a table and every row carries its own
         // number. A cell that wraps makes its row taller; the row is still
         // one unit.
-        std::vector<std::pair<Element, int>> render_table(const Block &block,
-                                                          const Theme &theme, int width)
+        std::vector<std::pair<Element, int>> render_table(const MdBlock &block,
+                                                          const MdTheme &theme, int width)
         {
             std::vector<std::pair<Element, int>> units;
             const std::size_t columns = block.headers.empty()
@@ -128,7 +128,7 @@ namespace ftxui::ext::md
                 return units;
 
             std::vector<std::vector<std::string>> grid;
-            auto flatten_row = [&](const TableRow &row)
+            auto flatten_row = [&](const MdTableRow &row)
             {
                 std::vector<std::string> out(columns);
                 for (std::size_t i = 0; i < columns && i < row.size(); ++i)
@@ -138,7 +138,7 @@ namespace ftxui::ext::md
             const bool has_header = !block.headers.empty();
             if (has_header)
                 grid.push_back(flatten_row(block.headers));
-            for (const TableRow &row : block.rows)
+            for (const MdTableRow &row : block.rows)
                 grid.push_back(flatten_row(row));
 
             const std::vector<int> widths =
@@ -199,11 +199,11 @@ namespace ftxui::ext::md
 
         // One row per item, so a list scrolls and numbers like prose rather
         // than being one opaque block.
-        Elements render_list(const Block &block, const Theme &theme, int width)
+        Elements render_list(const MdBlock &block, const MdTheme &theme, int width)
         {
             Elements rows;
             int number = block.start;
-            for (const std::vector<Inline> &item : block.items)
+            for (const std::vector<MdInline> &item : block.items)
             {
                 const std::string marker =
                     block.ordered ? std::to_string(number++) + ". " : "• ";
@@ -222,7 +222,7 @@ namespace ftxui::ext::md
             return rows;
         }
 
-        Elements render_quote(const Block &block, const Theme &theme, int width)
+        Elements render_quote(const MdBlock &block, const MdTheme &theme, int width)
         {
             Elements rows;
             std::vector<Word> words = words_of(block.spans, theme);
@@ -240,10 +240,10 @@ namespace ftxui::ext::md
 
     } // namespace
 
-    std::vector<Row> render_rows(const Document &doc, const Theme &theme,
-                                 int viewport_width, RenderOptions options)
+    std::vector<MdRow> render_markdown_rows(const MdDocument &doc, const MdTheme &theme,
+                                 int viewport_width, MdRenderOptions options)
     {
-        std::vector<Row> rows;
+        std::vector<MdRow> rows;
         int index = -1;
         auto push_lines = [&](Elements lines)
         {
@@ -256,17 +256,17 @@ namespace ftxui::ext::md
             rows.push_back({std::move(element), height, index, truncated});
         };
 
-        for (const Block &block : doc)
+        for (const MdBlock &block : doc)
         {
             ++index;
             if (!rows.empty())
                 rows.push_back({ftxui::text(""), 1, index, false});
             switch (block.kind)
             {
-            case BlockKind::Heading:
+            case MdBlockKind::Heading:
                 push_lines(render_heading(block, theme, viewport_width));
                 break;
-            case BlockKind::CodeBlock:
+            case MdBlockKind::CodeBlock:
             {
                 // One unit, one number: a fence reads as a single thing, and
                 // numbering its interior lines would imply they are separately
@@ -278,25 +278,25 @@ namespace ftxui::ext::md
                     rows.push_back({std::move(line), 1, index, truncated, true});
                 break;
             }
-            case BlockKind::Math:
+            case MdBlockKind::Math:
                 push_block(ftxui::ext::render_math(block.literal,
                                               ftxui::color(theme.math_fg),
                                               ftxui::ext::MathMode::Display));
                 break;
-            case BlockKind::Table:
+            case MdBlockKind::Table:
                 for (auto &[element, height] : render_table(block, theme, viewport_width))
                     rows.push_back({std::move(element), height, index, false});
                 break;
-            case BlockKind::List:
+            case MdBlockKind::List:
                 push_lines(render_list(block, theme, viewport_width));
                 break;
-            case BlockKind::Blockquote:
+            case MdBlockKind::Blockquote:
                 push_lines(render_quote(block, theme, viewport_width));
                 break;
-            case BlockKind::Rule:
+            case MdBlockKind::Rule:
                 rows.push_back({ftxui::separator() | ftxui::color(theme.border), 1, index, false});
                 break;
-            case BlockKind::Paragraph:
+            case MdBlockKind::Paragraph:
                 push_lines(wrap_words(words_of(block.spans, theme), viewport_width));
                 break;
             }
@@ -304,14 +304,14 @@ namespace ftxui::ext::md
         return rows;
     }
 
-    Element render(const Document &doc, const Theme &theme, int viewport_width)
+    Element render_markdown(const MdDocument &doc, const MdTheme &theme, int viewport_width)
     {
         Elements lines;
-        for (Row &row : render_rows(doc, theme, viewport_width))
+        for (MdRow &row : render_markdown_rows(doc, theme, viewport_width))
             lines.push_back(std::move(row.element));
         if (lines.empty())
             return ftxui::text("");
         return ftxui::vbox(std::move(lines));
     }
 
-} // namespace ftxui::ext::md
+} // namespace ftxui::ext

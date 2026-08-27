@@ -7,18 +7,18 @@
 
 #include <vector>
 
-namespace ftxui::ext::md
+namespace ftxui::ext
 {
 
     // One entry of the rendered document, with the number of terminal rows it
     // occupies. Almost everything is a single row; a display equation and a
     // fenced code block are the exceptions, and a gutter has to know how far
     // to skip before the next number lines up.
-    struct Row
+    struct MdRow
     {
         ftxui::Element element;
         int height = 1;
-        // Index into the Document this row came from, so a caller can go from
+        // Index into the MdDocument this row came from, so a caller can go from
         // "the cursor is on screen row 42" back to the block under it.
         int block = -1;
         // True when this row had content clipped at the right edge. Only code
@@ -30,7 +30,7 @@ namespace ftxui::ext::md
         bool atomic = false;
     };
 
-    struct RenderOptions
+    struct MdRenderOptions
     {
         // Code is never wrapped in the transcript -- its line breaks are the
         // content, and folding them would show something the model did not
@@ -43,10 +43,10 @@ namespace ftxui::ext::md
     // Pure document -> rows. No hit-testing state, no scroll wrapper, no
     // per-instance renderer object: the caller owns the viewport and decides
     // what to wrap the result in.
-    std::vector<Row> render_rows(const Document &doc, const Theme &theme,
-                                 int viewport_width, RenderOptions options = {});
+    std::vector<MdRow> render_markdown_rows(const MdDocument &doc, const MdTheme &theme,
+                                 int viewport_width, MdRenderOptions options = {});
 
-    // render_rows stacked into one Element, for callers that want no gutter.
-    ftxui::Element render(const Document &doc, const Theme &theme, int viewport_width);
+    // render_markdown_rows stacked into one Element, for callers that want no gutter.
+    ftxui::Element render_markdown(const MdDocument &doc, const MdTheme &theme, int viewport_width);
 
-} // namespace ftxui::ext::md
+} // namespace ftxui::ext

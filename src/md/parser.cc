@@ -5,7 +5,7 @@
 #include <cctype>
 #include <cstdlib>
 
-namespace ftxui::ext::md
+namespace ftxui::ext
 {
     namespace
     {
@@ -29,18 +29,18 @@ namespace ftxui::ext::md
             return out;
         }
 
-        void push_text(std::vector<Inline> &spans, std::string text)
+        void push_text(std::vector<MdInline> &spans, std::string text)
         {
             if (text.empty())
                 return;
-            if (!spans.empty() && spans.back().kind == InlineKind::Text)
+            if (!spans.empty() && spans.back().kind == MdInlineKind::Text)
                 spans.back().text += text;
             else
-                spans.push_back({InlineKind::Text, std::move(text)});
+                spans.push_back({MdInlineKind::Text, std::move(text)});
         }
 
         // Emphasis/code scanner over one math-free run of text.
-        void parse_emphasis(std::string_view text, std::vector<Inline> &spans)
+        void parse_emphasis(std::string_view text, std::vector<MdInline> &spans)
         {
             std::string pending;
             std::size_t i = 0;
@@ -60,7 +60,7 @@ namespace ftxui::ext::md
                     {
                         push_text(spans, std::move(pending));
                         pending.clear();
-                        spans.push_back({InlineKind::Code,
+                        spans.push_back({MdInlineKind::Code,
                                          std::string(text.substr(i + 1, close - i - 1))});
                         i = close + 1;
                         continue;
@@ -73,7 +73,7 @@ namespace ftxui::ext::md
                     {
                         push_text(spans, std::move(pending));
                         pending.clear();
-                        spans.push_back({InlineKind::Bold,
+                        spans.push_back({MdInlineKind::Bold,
                                          std::string(text.substr(i + 2, close - i - 2))});
                         i = close + 2;
                         continue;
@@ -86,7 +86,7 @@ namespace ftxui::ext::md
                     {
                         push_text(spans, std::move(pending));
                         pending.clear();
-                        spans.push_back({InlineKind::Italic,
+                        spans.push_back({MdInlineKind::Italic,
                                          std::string(text.substr(i + 1, close - i - 1))});
                         i = close + 1;
                         continue;
@@ -100,9 +100,9 @@ namespace ftxui::ext::md
 
         // Math spans are claimed before emphasis so an equation's underscores
         // and asterisks are never read as markup.
-        std::vector<Inline> parse_inlines(std::string_view text)
+        std::vector<MdInline> parse_inlines(std::string_view text)
         {
-            std::vector<Inline> spans;
+            std::vector<MdInline> spans;
             std::size_t cursor = 0;
             while (cursor < text.size())
             {
@@ -125,7 +125,7 @@ namespace ftxui::ext::md
                 }
                 parse_emphasis(text.substr(cursor, prose_end - cursor), spans);
                 const std::size_t delim = text[open + 1] == '$' ? 2 : 1;
-                spans.push_back({InlineKind::Math,
+                spans.push_back({MdInlineKind::Math,
                                  unescape_math(text.substr(open + delim,
                                                            (end - delim) - (open + delim))),
                                  emphasized});
@@ -280,29 +280,29 @@ namespace ftxui::ext::md
 
     } // namespace
 
-    Document parse(std::string_view raw)
+    MdDocument parse_markdown(std::string_view raw)
     {
         // Rewrites \(..\)/\[..\] to the dollar forms find_math_span scans for
         // and wraps bare LaTeX environments, which LLM output emits constantly.
         const std::string source = ftxui::ext::NormalizeMathDelimiters(raw);
         const std::vector<std::string_view> lines = split_lines(source);
 
-        Document doc;
+        MdDocument doc;
         std::string paragraph;
 
         auto flush_paragraph = [&]
         {
             if (paragraph.empty())
                 return;
-            Block block;
+            MdBlock block;
             if (std::string latex; whole_display_math(paragraph, latex))
             {
-                block.kind = BlockKind::Math;
+                block.kind = MdBlockKind::Math;
                 block.literal = std::move(latex);
             }
             else
             {
-                block.kind = BlockKind::Paragraph;
+                block.kind = MdBlockKind::Paragraph;
                 block.spans = parse_inlines(paragraph);
             }
             doc.push_back(std::move(block));
@@ -321,8 +321,8 @@ namespace ftxui::ext::md
                 flush_paragraph();
                 const char marker = ticks >= 3 ? '`' : '~';
                 const std::size_t width = ticks >= 3 ? ticks : tildes;
-                Block block;
-                block.kind = BlockKind::CodeBlock;
+                MdBlock block;
+                block.kind = MdBlockKind::CodeBlock;
                 block.language = std::string(trim(stripped.substr(width)));
                 // An unterminated fence runs to the end of the source: mid-stream
                 // that is the common case, and showing the partial code block
@@ -352,8 +352,8 @@ namespace ftxui::ext::md
                 i + 1 < lines.size() && is_delimiter_row(trim(lines[i + 1])))
             {
                 flush_paragraph();
-                Block block;
-                block.kind = BlockKind::Table;
+                MdBlock block;
+                block.kind = MdBlockKind::Table;
                 for (const std::string &cell : split_cells(stripped))
                     block.headers.push_back(parse_inlines(cell));
                 const std::size_t columns = block.headers.size();
@@ -362,7 +362,7 @@ namespace ftxui::ext::md
                     const std::string_view row = trim(lines[i]);
                     if (row.empty() || row.find('|') == std::string_view::npos)
                         break;
-                    TableRow cells;
+                    MdTableRow cells;
                     for (const std::string &cell : split_cells(row))
                         cells.push_back(parse_inlines(cell));
                     // Ragged rows are normal in generated markdown; pad or
@@ -378,8 +378,8 @@ namespace ftxui::ext::md
             if (is_rule(stripped))
             {
                 flush_paragraph();
-                Block rule_block;
-                rule_block.kind = BlockKind::Rule;
+                MdBlock rule_block;
+                rule_block.kind = MdBlockKind::Rule;
                 doc.push_back(std::move(rule_block));
                 continue;
             }
@@ -401,8 +401,8 @@ namespace ftxui::ext::md
                     quoted += std::string(trim(row));
                 }
                 --i;
-                Block block;
-                block.kind = BlockKind::Blockquote;
+                MdBlock block;
+                block.kind = MdBlockKind::Blockquote;
                 block.spans = parse_inlines(quoted);
                 doc.push_back(std::move(block));
                 continue;
@@ -416,8 +416,8 @@ namespace ftxui::ext::md
             if (bullet || ordered)
             {
                 flush_paragraph();
-                Block block;
-                block.kind = BlockKind::List;
+                MdBlock block;
+                block.kind = MdBlockKind::List;
                 block.ordered = ordered != 0;
                 block.start = block.ordered ? first_number : 1;
                 for (; i < lines.size(); ++i)
@@ -442,8 +442,8 @@ namespace ftxui::ext::md
                     std::isspace(static_cast<unsigned char>(stripped[level])))
                 {
                     flush_paragraph();
-                    Block block;
-                    block.kind = BlockKind::Heading;
+                    MdBlock block;
+                    block.kind = MdBlockKind::Heading;
                     block.level = static_cast<int>(level);
                     block.spans = parse_inlines(trim(stripped.substr(level)));
                     doc.push_back(std::move(block));
@@ -460,4 +460,4 @@ namespace ftxui::ext::md
         return doc;
     }
 
-} // namespace ftxui::ext::md
+} // namespace ftxui::ext

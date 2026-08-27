@@ -4,10 +4,10 @@
 #include <string_view>
 #include <vector>
 
-namespace ftxui::ext::md
+namespace ftxui::ext
 {
 
-    enum class InlineKind
+    enum class MdInlineKind
     {
         Text,
         Bold,
@@ -16,9 +16,9 @@ namespace ftxui::ext::md
         Math, // inline $...$, already rendered to terminal glyphs
     };
 
-    struct Inline
+    struct MdInline
     {
-        InlineKind kind = InlineKind::Text;
+        MdInlineKind kind = MdInlineKind::Text;
         std::string text;
         // Math rendered to terminal glyphs cannot also be bolded -- the
         // subscript and superscript characters have no bold forms -- so
@@ -27,7 +27,7 @@ namespace ftxui::ext::md
         bool emphasized = false;
     };
 
-    enum class BlockKind
+    enum class MdBlockKind
     {
         Paragraph,
         Heading,
@@ -40,36 +40,36 @@ namespace ftxui::ext::md
     };
 
     // One table row's cells, each already split into inline spans.
-    using TableRow = std::vector<std::vector<Inline>>;
+    using MdTableRow = std::vector<std::vector<MdInline>>;
 
-    struct Block
+    struct MdBlock
     {
-        BlockKind kind = BlockKind::Paragraph;
+        MdBlockKind kind = MdBlockKind::Paragraph;
         int level = 0;             // Heading: 1..6
         std::string language;      // CodeBlock: the fence's info string
         std::string literal;       // CodeBlock body, or Math's LaTeX source
-        std::vector<Inline> spans; // Paragraph / Heading / Blockquote
+        std::vector<MdInline> spans; // Paragraph / Heading / Blockquote
 
         // Table
-        TableRow headers;
-        std::vector<TableRow> rows;
+        MdTableRow headers;
+        std::vector<MdTableRow> rows;
 
         // List
         bool ordered = false;
         int start = 1;
-        std::vector<std::vector<Inline>> items;
+        std::vector<std::vector<MdInline>> items;
     };
 
-    using Document = std::vector<Block>;
+    using MdDocument = std::vector<MdBlock>;
 
     // Line-oriented markdown parser covering what a chat reply actually
     // contains: ATX headings, fenced code, paragraphs, and the inline set
-    // bold/italic/code/math. Plain values throughout — a Document is freely
+    // bold/italic/code/math. Plain values throughout — a MdDocument is freely
     // copyable and movable.
     //
     // Tolerant of truncation by design: this is re-run on every streamed
     // token, so an unterminated fence or emphasis run renders as the partial
     // construct rather than falling back to raw text.
-    Document parse(std::string_view source);
+    MdDocument parse_markdown(std::string_view source);
 
-} // namespace ftxui::ext::md
+} // namespace ftxui::ext

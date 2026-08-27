@@ -11,10 +11,10 @@
 
 #include <ftxui/screen/color.hpp>
 
-namespace ftxui::ext::org
+namespace ftxui::ext
 {
 
-    struct Theme
+    struct OrgTheme
     {
         // shared with the markdown theme
         ftxui::Color heading1 = ftxui::Color::Magenta;
@@ -78,11 +78,11 @@ namespace ftxui::ext::org
             return s;
         }
 
-        static Theme Dark() { return Theme{}; }
+        static OrgTheme Dark() { return OrgTheme{}; }
 
-        static Theme Light()
+        static OrgTheme Light()
         {
-            Theme t;
+            OrgTheme t;
             // shared palette mirrors the markdown light theme
             t.heading1 = ftxui::Color::RGB(0x82, 0x50, 0xDF);
             t.heading2 = ftxui::Color::RGB(0x09, 0x69, 0xDA);
@@ -125,4 +125,4 @@ namespace ftxui::ext::org
         }
     };
 
-} // namespace ftxui::ext::org
+} // namespace ftxui::ext

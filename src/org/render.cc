@@ -15,7 +15,7 @@
 #include <string>
 #include <utility>
 
-namespace ftxui::ext::org
+namespace ftxui::ext
 {
     namespace
     {
@@ -29,54 +29,54 @@ namespace ftxui::ext::org
         using ftxui::ext::wrap_plain;
         using ftxui::ext::wrap_words;
 
-        Decorator style_for(const Inline& span, const Theme& theme)
+        Decorator style_for(const OrgInline& span, const OrgTheme& theme)
         {
             switch (span.kind)
             {
-            case InlineKind::Bold:
+            case OrgInlineKind::Bold:
                 return ftxui::bold | ftxui::color(theme.bold_fg);
-            case InlineKind::Italic:
+            case OrgInlineKind::Italic:
                 return ftxui::italic | ftxui::color(theme.italic_fg);
-            case InlineKind::Underline:
+            case OrgInlineKind::Underline:
                 return ftxui::underlined;
-            case InlineKind::Strike:
+            case OrgInlineKind::Strike:
                 return ftxui::strikethrough;
-            case InlineKind::Code:
-            case InlineKind::Verbatim:
+            case OrgInlineKind::Code:
+            case OrgInlineKind::Verbatim:
                 return ftxui::color(theme.code_fg) | ftxui::bgcolor(theme.code_bg);
-            case InlineKind::Link:
+            case OrgInlineKind::Link:
                 return ftxui::underlined | ftxui::color(theme.link);
-            case InlineKind::Todo:
+            case OrgInlineKind::Todo:
                 return ftxui::bold | ftxui::color(theme.todo);
-            case InlineKind::Done:
+            case OrgInlineKind::Done:
                 return ftxui::bold | ftxui::color(theme.done);
-            case InlineKind::Priority:
+            case OrgInlineKind::Priority:
                 return ftxui::color(theme.priority);
-            case InlineKind::Tag:
+            case OrgInlineKind::Tag:
                 return ftxui::color(theme.tag);
-            case InlineKind::TimestampActive:
+            case OrgInlineKind::TimestampActive:
                 return ftxui::color(theme.timestamp_active);
-            case InlineKind::TimestampInactive:
+            case OrgInlineKind::TimestampInactive:
                 return ftxui::color(theme.timestamp_inactive);
-            case InlineKind::TimestampDiary:
+            case OrgInlineKind::TimestampDiary:
                 return ftxui::color(theme.timestamp_diary);
-            case InlineKind::PlanningKey:
+            case OrgInlineKind::PlanningKey:
                 return ftxui::color(theme.planning_key);
-            case InlineKind::DrawerName:
+            case OrgInlineKind::DrawerName:
                 return ftxui::color(theme.drawer);
-            case InlineKind::PropertyKey:
+            case OrgInlineKind::PropertyKey:
                 return ftxui::color(theme.property_key);
-            case InlineKind::KeywordKey:
+            case OrgInlineKind::KeywordKey:
                 return ftxui::color(theme.keyword);
-            case InlineKind::Clock:
+            case OrgInlineKind::Clock:
                 return ftxui::color(theme.clock);
-            case InlineKind::Duration:
+            case OrgInlineKind::Duration:
                 return ftxui::color(theme.duration);
-            case InlineKind::LogState:
+            case OrgInlineKind::LogState:
                 return ftxui::color(theme.log_state);
-            case InlineKind::Computed:
+            case OrgInlineKind::Computed:
                 return ftxui::color(theme.computed);
-            case InlineKind::Text:
+            case OrgInlineKind::Text:
                 break;
             }
             return ftxui::nothing;
@@ -100,29 +100,29 @@ namespace ftxui::ext::org
             }
         }
 
-        std::vector<Word> words_of(const std::pmr::vector<Inline>& spans, const Theme& theme)
+        std::vector<Word> words_of(const std::pmr::vector<OrgInline>& spans, const OrgTheme& theme)
         {
             std::vector<Word> out;
-            for (const Inline& span : spans)
+            for (const OrgInline& span : spans)
                 push_words(out, span.text, style_for(span, theme));
             return out;
         }
 
         // Headline words: plain text gets the md heading treatment (bold +
         // level color); component words keep their own colors.
-        std::vector<Word> headline_words(const std::pmr::vector<Inline>& spans,
-                                     const Theme& theme, ftxui::Color color)
+        std::vector<Word> headline_words(const std::pmr::vector<OrgInline>& spans,
+                                     const OrgTheme& theme, ftxui::Color color)
         {
             std::vector<Word> out;
-            for (const Inline& span : spans)
+            for (const OrgInline& span : spans)
             {
                 Decorator style = ftxui::bold | ftxui::color(color);
                 switch (span.kind)
                 {
-                case InlineKind::Bold:
-                case InlineKind::Italic:
-                case InlineKind::Underline:
-                case InlineKind::Text:
+                case OrgInlineKind::Bold:
+                case OrgInlineKind::Italic:
+                case OrgInlineKind::Underline:
+                case OrgInlineKind::Text:
                     break;
                 default:
                     style = style_for(span, theme);
@@ -133,7 +133,7 @@ namespace ftxui::ext::org
             return out;
         }
 
-        Elements render_heading(const Block& block, const Theme& theme, int width)
+        Elements render_heading(const OrgBlock& block, const OrgTheme& theme, int width)
         {
             const ftxui::Color color = block.level <= 1   ? theme.heading1
                                        : block.level == 2 ? theme.heading2
@@ -144,7 +144,7 @@ namespace ftxui::ext::org
             return rows;
         }
 
-        std::vector<std::pair<Element, int>> render_table(const Block& block, const Theme& theme,
+        std::vector<std::pair<Element, int>> render_table(const OrgBlock& block, const OrgTheme& theme,
                                                           int width)
         {
             std::vector<std::pair<Element, int>> units;
@@ -160,17 +160,17 @@ namespace ftxui::ext::org
             {
                 grid.push_back({});
                 computed.push_back({});
-                for (const TableCell& cell : block.headers)
+                for (const OrgTableCell& cell : block.headers)
                 {
                     grid.back().push_back(std::string(cell.text));
                     computed.back().push_back(cell.computed);
                 }
             }
-            for (const std::pmr::vector<TableCell>& row : block.rows)
+            for (const std::pmr::vector<OrgTableCell>& row : block.rows)
             {
                 grid.push_back({});
                 computed.push_back({});
-                for (const TableCell& cell : row)
+                for (const OrgTableCell& cell : row)
                 {
                     grid.back().push_back(std::string(cell.text));
                     computed.back().push_back(cell.computed);
@@ -233,10 +233,10 @@ namespace ftxui::ext::org
             return units;
         }
 
-        Elements render_list(const Block& block, const Theme& theme, int width)
+        Elements render_list(const OrgBlock& block, const OrgTheme& theme, int width)
         {
             Elements rows;
-            for (const ListItem& item : block.items)
+            for (const OrgListItem& item : block.items)
             {
                 const int indent = static_cast<int>(ftxui::string_width(std::string(item.marker)));
                 Elements wrapped = wrap_words(words_of(item.spans, theme), width - indent);
@@ -253,7 +253,7 @@ namespace ftxui::ext::org
             return rows;
         }
 
-        Elements render_quote(const Block& block, const Theme& theme, int width)
+        Elements render_quote(const OrgBlock& block, const OrgTheme& theme, int width)
         {
             Elements rows;
             std::vector<Word> words = words_of(block.spans, theme);
@@ -271,10 +271,10 @@ namespace ftxui::ext::org
 
     } // namespace
 
-    std::vector<Row> render_rows(const OrgDocument& doc, const Theme& theme,
-                                 int viewport_width, RenderOptions options)
+    std::vector<OrgRow> render_org_rows(const OrgDocument& doc, const OrgTheme& theme,
+                                 int viewport_width, OrgRenderOptions options)
     {
-        std::vector<Row> rows;
+        std::vector<OrgRow> rows;
         int index = -1;
         auto push_lines = [&](Elements lines)
         {
@@ -282,7 +282,7 @@ namespace ftxui::ext::org
                 rows.push_back({std::move(line), 1, index, false, false});
         };
 
-        for (const Block& block : doc.blocks)
+        for (const OrgBlock& block : doc.blocks)
         {
             ++index;
             // spacing follows the source: only blocks the source separated
@@ -291,29 +291,29 @@ namespace ftxui::ext::org
                 rows.push_back({ftxui::text(""), 1, index, false, false});
             switch (block.kind)
             {
-            case BlockKind::Headline:
+            case OrgBlockKind::Headline:
                 push_lines(render_heading(block, theme, viewport_width));
                 break;
-            case BlockKind::Paragraph:
-            case BlockKind::Keyword:
-            case BlockKind::DrawerOpen:
-            case BlockKind::DrawerEnd:
-            case BlockKind::Planning:
-            case BlockKind::Clock:
+            case OrgBlockKind::Paragraph:
+            case OrgBlockKind::Keyword:
+            case OrgBlockKind::DrawerOpen:
+            case OrgBlockKind::DrawerEnd:
+            case OrgBlockKind::Planning:
+            case OrgBlockKind::Clock:
                 push_lines(wrap_words(words_of(block.spans, theme), viewport_width));
                 break;
-            case BlockKind::Table:
+            case OrgBlockKind::Table:
                 for (auto& [element, height] : render_table(block, theme, viewport_width))
                     rows.push_back({std::move(element), height, index, false, false});
                 break;
-            case BlockKind::List:
+            case OrgBlockKind::List:
                 push_lines(render_list(block, theme, viewport_width));
                 break;
-            case BlockKind::Quote:
+            case OrgBlockKind::Quote:
                 push_lines(render_quote(block, theme, viewport_width));
                 break;
-            case BlockKind::Src:
-            case BlockKind::Example:
+            case OrgBlockKind::Src:
+            case OrgBlockKind::Example:
             {
                 bool truncated = false;
                 Elements lines = ftxui::ext::code_box(
@@ -329,4 +329,4 @@ namespace ftxui::ext::org
         return rows;
     }
 
-} // namespace ftxui::ext::org
+} // namespace ftxui::ext

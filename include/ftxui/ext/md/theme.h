@@ -4,10 +4,10 @@
 
 #include <ftxui/screen/color.hpp>
 
-namespace ftxui::ext::md
+namespace ftxui::ext
 {
 
-    struct Theme
+    struct MdTheme
     {
         ftxui::Color heading1 = ftxui::Color::Magenta;
         ftxui::Color heading2 = ftxui::Color::Blue;
@@ -59,14 +59,14 @@ namespace ftxui::ext::md
             return s;
         }
 
-        static Theme Dark()
+        static MdTheme Dark()
         {
-            return Theme{};
+            return MdTheme{};
         }
 
-        static Theme Light()
+        static MdTheme Light()
         {
-            Theme t;
+            MdTheme t;
             t.heading1 = ftxui::Color::RGB(0x82, 0x50, 0xDF);
             t.heading2 = ftxui::Color::RGB(0x09, 0x69, 0xDA);
             t.heading3 = ftxui::Color::RGB(0x1A, 0x7F, 0x37);
@@ -102,4 +102,4 @@ namespace ftxui::ext::md
         }
     };
 
-} // namespace ftxui::ext::md
+} // namespace ftxui::ext
