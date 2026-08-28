@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
 
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 include(FetchContent)
 
 set(FTXUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -34,10 +37,10 @@ add_library(ftxui-ext STATIC
     src/vim_navigator.cc
     src/app_ticker.cc
     src/file_source.cc
-    src/md/parser.cc
-    src/md/render.cc
+    src/md_parser.cc
+    src/md_render.cc
     src/context_extractor.cc
-    src/org/render.cc
+    src/org_render.cc
 )
 target_include_directories(ftxui-ext PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(ftxui-ext PUBLIC dom component screen)

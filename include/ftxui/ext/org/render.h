@@ -6,7 +6,7 @@
 // navigate units exactly like the markdown view does.
 #pragma once
 
-#include "ftxui/ext/org/doc.h"
+#include "ftxui/ext/org/org.h"
 #include "ftxui/ext/org/theme.h"
 
 #include <ftxui/dom/elements.hpp>
@@ -33,7 +33,7 @@ namespace ftxui::ext
     // Pure document -> rows. Table cells wrap within their columns; prose
     // wraps to the viewport width; code is a bordered box (truncated unless
     // wrap_code).
-    std::vector<OrgRow> render_org_rows(const OrgDocument& doc, const OrgTheme& theme,
-                                 int viewport_width, OrgRenderOptions options = {});
+    std::vector<OrgRow> render_org_rows(const OrgDocument &doc, const OrgTheme &theme,
+                                        int viewport_width, OrgRenderOptions options = {});
 
 } // namespace ftxui::ext
