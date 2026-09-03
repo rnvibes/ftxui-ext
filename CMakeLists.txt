@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
+project(ftxui-ext LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -49,3 +50,12 @@ if(SURI_ENABLE_TREESITTER)
   target_link_libraries(ftxui-ext PUBLIC suri-code)
   target_compile_definitions(ftxui-ext PUBLIC SURI_CHAT_HAS_TREESITTER)
 endif()
+
+option(FTXUI_EXT_BUILD_TESTS "Build ftxui-ext tests" ON)
+if(FTXUI_EXT_BUILD_TESTS)
+  enable_testing()
+  add_executable(latex_math_test tests/latex_math_test.cc)
+  target_link_libraries(latex_math_test PRIVATE ftxui-ext dom component screen)
+  add_test(NAME latex_math_test COMMAND latex_math_test)
+endif()
+
