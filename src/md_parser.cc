@@ -29,18 +29,76 @@ namespace ftxui::ext
             return out;
         }
 
-        void push_text(std::vector<MdInline> &spans, std::string text)
+        void push_text(std::vector<MdInline> &spans, std::string text,
+                       MdInlineKind kind = MdInlineKind::Text)
         {
             if (text.empty())
                 return;
-            if (!spans.empty() && spans.back().kind == MdInlineKind::Text)
+            if (!spans.empty() && spans.back().kind == kind)
                 spans.back().text += text;
             else
-                spans.push_back({MdInlineKind::Text, std::move(text)});
+                spans.push_back({kind, std::move(text)});
         }
 
-        // Emphasis/code scanner over one math-free run of text.
-        void parse_emphasis(std::string_view text, std::vector<MdInline> &spans)
+        // Search for a matching closing delimiter outside math, code, and escape sequences.
+        std::size_t find_closing_delim(std::string_view text, std::size_t start,
+                                       std::string_view delim)
+        {
+            std::size_t i = start;
+            while (i < text.size())
+            {
+                if (text[i] == '\\' && i + 1 < text.size() &&
+                    std::ispunct(static_cast<unsigned char>(text[i + 1])))
+                {
+                    i += 2;
+                    continue;
+                }
+                // Skip math spans
+                if (auto span = ftxui::ext::find_math_span(text, i); span && span->first == i)
+                {
+                    i = span->second;
+                    continue;
+                }
+                // Skip code spans
+                if (text[i] == '`')
+                {
+                    const std::size_t close = text.find('`', i + 1);
+                    if (close != std::string_view::npos)
+                    {
+                        i = close + 1;
+                        continue;
+                    }
+                }
+                if (delim.size() == 2)
+                {
+                    if (text.compare(i, 2, delim) == 0)
+                        return i;
+                }
+                else if (delim.size() == 1)
+                {
+                    if (text[i] == delim[0])
+                    {
+                        // Ensure single '*' doesn't match '**'
+                        if (delim[0] == '*' && i + 1 < text.size() && text[i + 1] == '*')
+                        {
+                            i += 2;
+                            continue;
+                        }
+                        if (delim[0] == '*' && i > 0 && text[i - 1] == '*')
+                        {
+                            ++i;
+                            continue;
+                        }
+                        return i;
+                    }
+                }
+                ++i;
+            }
+            return std::string_view::npos;
+        }
+
+        void parse_inlines_into(std::string_view text, std::vector<MdInline> &spans,
+                                MdInlineKind active_kind)
         {
             std::string pending;
             std::size_t i = 0;
@@ -53,12 +111,31 @@ namespace ftxui::ext
                     i += 2;
                     continue;
                 }
+
+                // Math spans are claimed before emphasis so an equation's underscores
+                // and asterisks are never read as markup.
+                if (auto span = ftxui::ext::find_math_span(text, i); span && span->first == i)
+                {
+                    push_text(spans, std::move(pending), active_kind);
+                    pending.clear();
+                    const std::size_t delim = text[i + 1] == '$' ? 2 : 1;
+                    const bool emphasized = (active_kind == MdInlineKind::Bold ||
+                                             active_kind == MdInlineKind::Italic);
+                    spans.push_back({MdInlineKind::Math,
+                                     unescape_math(text.substr(i + delim,
+                                                               (span->second - delim) - (i + delim))),
+                                     emphasized});
+                    i = span->second;
+                    continue;
+                }
+
+                // Inline code span
                 if (text[i] == '`')
                 {
                     if (const std::size_t close = text.find('`', i + 1);
                         close != std::string_view::npos)
                     {
-                        push_text(spans, std::move(pending));
+                        push_text(spans, std::move(pending), active_kind);
                         pending.clear();
                         spans.push_back({MdInlineKind::Code,
                                          std::string(text.substr(i + 1, close - i - 1))});
@@ -66,72 +143,62 @@ namespace ftxui::ext
                         continue;
                     }
                 }
-                if (text.compare(i, 2, "**") == 0)
+
+                // Bold span: can span across math, code, and text
+                if (active_kind != MdInlineKind::Bold && text.compare(i, 2, "**") == 0)
                 {
-                    if (const std::size_t close = text.find("**", i + 2);
+                    if (const std::size_t close = find_closing_delim(text, i + 2, "**");
                         close != std::string_view::npos)
                     {
-                        push_text(spans, std::move(pending));
+                        push_text(spans, std::move(pending), active_kind);
                         pending.clear();
-                        spans.push_back({MdInlineKind::Bold,
-                                         std::string(text.substr(i + 2, close - i - 2))});
+                        parse_inlines_into(text.substr(i + 2, close - (i + 2)), spans,
+                                           MdInlineKind::Bold);
                         i = close + 2;
                         continue;
                     }
                 }
-                if (text[i] == '*' || text[i] == '_')
+
+                // Italic span: can span across math, code, and text
+                if (active_kind != MdInlineKind::Italic &&
+                    (text[i] == '*' || text[i] == '_'))
                 {
-                    if (const std::size_t close = text.find(text[i], i + 1);
-                        close != std::string_view::npos && close > i + 1)
+                    if (text[i] == '*' && i + 1 < text.size() && text[i + 1] == '*')
                     {
-                        push_text(spans, std::move(pending));
-                        pending.clear();
-                        spans.push_back({MdInlineKind::Italic,
-                                         std::string(text.substr(i + 1, close - i - 1))});
-                        i = close + 1;
-                        continue;
+                        // part of ** (handled above or unclosed)
+                    }
+                    else if (text[i] == '_' && i > 0 &&
+                             std::isalnum(static_cast<unsigned char>(text[i - 1])))
+                    {
+                        // Intraword underscore (e.g. variable_name), not markup
+                    }
+                    else
+                    {
+                        const char d = text[i];
+                        const std::string_view delim(&d, 1);
+                        if (const std::size_t close = find_closing_delim(text, i + 1, delim);
+                            close != std::string_view::npos && close > i + 1)
+                        {
+                            push_text(spans, std::move(pending), active_kind);
+                            pending.clear();
+                            parse_inlines_into(text.substr(i + 1, close - (i + 1)), spans,
+                                               MdInlineKind::Italic);
+                            i = close + 1;
+                            continue;
+                        }
                     }
                 }
+
                 pending += text[i];
                 ++i;
             }
-            push_text(spans, std::move(pending));
+            push_text(spans, std::move(pending), active_kind);
         }
 
-        // Math spans are claimed before emphasis so an equation's underscores
-        // and asterisks are never read as markup.
         std::vector<MdInline> parse_inlines(std::string_view text)
         {
             std::vector<MdInline> spans;
-            std::size_t cursor = 0;
-            while (cursor < text.size())
-            {
-                auto span = ftxui::ext::find_math_span(text, cursor);
-                if (!span)
-                    break;
-                const auto [open, end] = *span;
-                // **$x$** -- claim the markers here rather than leaving them
-                // for the emphasis scanner, which would find no partner for
-                // them (the math is already consumed) and print them raw.
-                std::size_t prose_end = open;
-                std::size_t resume = end;
-                bool emphasized = false;
-                if (open >= cursor + 2 && text.compare(open - 2, 2, "**") == 0 &&
-                    end + 2 <= text.size() && text.compare(end, 2, "**") == 0)
-                {
-                    emphasized = true;
-                    prose_end = open - 2;
-                    resume = end + 2;
-                }
-                parse_emphasis(text.substr(cursor, prose_end - cursor), spans);
-                const std::size_t delim = text[open + 1] == '$' ? 2 : 1;
-                spans.push_back({MdInlineKind::Math,
-                                 unescape_math(text.substr(open + delim,
-                                                           (end - delim) - (open + delim))),
-                                 emphasized});
-                cursor = resume;
-            }
-            parse_emphasis(text.substr(cursor), spans);
+            parse_inlines_into(text, spans, MdInlineKind::Text);
             return spans;
         }
 

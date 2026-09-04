@@ -127,6 +127,10 @@ During deep code analysis, eight specific issues were identified and resolved:
 - **Issue**: Directives `\limits` and `\nolimits` were silently consumed without updating operator state.
 - **Fix**: `\limits` sets `prev_is_bigop = true`, and `\nolimits` sets `prev_is_bigop = false`, enabling constructs like `\int\limits_0^1` to stack limits in display mode.
 
+### Bug 9: Dangling `**` When Bold/Italic Wraps Inline Math Spans
+- **Issue**: In `src/md_parser.cc`, `parse_inlines` previously divided text at math span boundaries and passed each isolated chunk to `parse_emphasis`. When bold `**...**` or italic `*...*` wrapped a phrase or sentence containing an inline formula (e.g. `**In summary, the equation states that the field ( \(\phi\) ) must equal zero.**`), the opening `**` fell into the chunk before math and the closing `**` fell into the chunk after math. Neither chunk found its matching delimiter, causing both `**` markers to remain unmatched and be printed as raw `**` text in the UI.
+- **Fix**: Replaced disjoint chunking with an integrated, context-aware inline parser `parse_inlines_into` with `find_closing_delim`. Delimiters outside math now match seamlessly across math and code boundaries, cleanly stripping the formatting markers, styling the surrounding prose as `MdInlineKind::Bold` or `MdInlineKind::Italic`, and marking the enclosed math as `emphasized = true`.
+
 ---
 
 ## 5. Performance & Streaming Enhancements
@@ -144,7 +148,7 @@ During deep code analysis, eight specific issues were identified and resolved:
 ## 6. KaTeX & LaTeX Math Verification Suite
 
 - **`tests/latex_math_test.cc`**:
-  - 55 comprehensive test assertions covering span detection, delimiter normalization, inline substitution, 2D display layout, and bug regression tests.
+  - 101 comprehensive test assertions covering span detection, delimiter normalization, inline substitution, 2D display layout, bold/italic wrapping across math, and bug regression tests.
   - Added to `CMakeLists.txt` via `latex_math_test` executable, registered with CTest (`100% tests passed out of 1`).
 - **`math.md`**:
   - Created reference test document including:
@@ -168,3 +172,33 @@ During deep code analysis, eight specific issues were identified and resolved:
    - *Deferment*: Terminal columns are precious; full table grid borders inside inline/display math can push equations beyond viewport boundaries. Left as space-padded alignment for readability.
 3. **Sub-character Kerning**:
    - *Observation*: Terminal emulators operate on discrete monospace character cells, so sub-pixel kerning and fractional font metric shifting are physically impossible without sixel/canvas raster graphics (which was previously tried and abandoned due to braille dot artifacts). Monospace character grid layout remains the optimal terminal presentation.
+
+---
+
+## 8. Addendum: Bold/Italic & Math Parsing Integration
+
+### Problem Statement
+When markdown formatting (bold `**...**` or italic `*...*` / `_..._`) wrapped a sentence or phrase that contained an inline math formula (such as `**In summary, the equation states that the field ( \(\phi\) ) must equal zero.**`), the terminal output left the raw `**` asterisks rendered literally around the text instead of bolding it.
+
+### Root Cause
+`src/md_parser.cc`'s `parse_inlines` previously claimed math spans first by splitting the raw text into disjoint chunks around each equation boundary:
+- Chunk 1: prefix text up to the math span
+- Chunk 2: math span
+- Chunk 3: suffix text after the math span
+
+Each chunk was passed independently to `parse_emphasis`. Consequently:
+- The opening `**` was in Chunk 1, but its matching closing `**` was in Chunk 3.
+- Chunk 1's scanner looked for closing `**` within Chunk 1, found none, and emitted the opening `**` as literal text.
+- Chunk 3's scanner encountered a closing `**` with no opener, and emitted it as literal text.
+- An existing check only handled `**$x$**` where `**` was directly adjacent to `$`, failing on any phrase with words, spaces, or parentheses surrounding the equation.
+
+### Resolution
+1. **Integrated Inline Parser**: Replaced disjoint chunking with `parse_inlines_into` and `find_closing_delim`.
+2. **Span-Aware Delimiter Matching**: `find_closing_delim` searches forward across math spans, code blocks, and escaped characters, matching closing delimiters across equations.
+3. **Format Context Propagation**:
+   - Delimiter tokens (`**`, `*`, `_`) are cleanly consumed without leaking into the rendered text.
+   - Text preceding and following the math formula is styled according to the active formatting context (`MdInlineKind::Bold` or `MdInlineKind::Italic`).
+   - Enclosed math formulas are flagged with `emphasized = true` to render in `theme.math_emphasis` color.
+4. **Intraword Underscore Protection**: Intraword underscores in prose (e.g. `variable_name`) are guarded to prevent accidental italicization.
+5. **Regression Coverage**: Added `test_bold_math_interaction()` in `tests/latex_math_test.cc` asserting that `**` markers are never emitted literally when wrapping math expressions (101 unit tests passing).
+

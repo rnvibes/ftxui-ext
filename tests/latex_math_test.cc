@@ -1,4 +1,5 @@
 #include "ftxui/ext/latex_math.h"
+#include "ftxui/ext/md/parser.h"
 #include <ftxui/dom/elements.hpp>
 
 #include <cassert>
@@ -285,6 +286,87 @@ void test_next_glyph() {
     TEST_ASSERT(geof.empty());
 }
 
+void test_bold_math_interaction() {
+    TEST_CASE("Bold and math interaction (preventing dangling **)");
+
+    // 1. Exact user case: bold sentence wrapping an inline math span \( \phi \)
+    {
+        std::string raw =
+            "**In summary, the equation states that the total second-order derivative of the field ( \\(\\phi\\) ) with respect to spacetime coordinates must equal zero when combined with the mass term.**";
+        auto doc = ftxui::ext::parse_markdown(raw);
+        TEST_ASSERT(!doc.empty());
+        TEST_ASSERT(doc[0].kind == ftxui::ext::MdBlockKind::Paragraph);
+        const auto &spans = doc[0].spans;
+
+        // Verify that NO span contains the raw '**' markers
+        for (const auto &span : spans) {
+            TEST_ASSERT(span.text.find("**") == std::string::npos);
+        }
+
+        // Expected: [Bold, Math(emphasized=true), Bold]
+        TEST_ASSERT(spans.size() == 3);
+        TEST_ASSERT(spans[0].kind == ftxui::ext::MdInlineKind::Bold);
+        TEST_ASSERT(spans[0].text.starts_with("In summary"));
+        TEST_ASSERT(spans[1].kind == ftxui::ext::MdInlineKind::Math);
+        TEST_ASSERT(spans[1].emphasized == true);
+        TEST_ASSERT(spans[1].text == "\\phi");
+        TEST_ASSERT(spans[2].kind == ftxui::ext::MdInlineKind::Bold);
+        TEST_ASSERT(spans[2].text.ends_with("mass term."));
+    }
+
+    // 2. Dollar syntax: **$x$ + $y$ = $z$**
+    {
+        std::string raw = "**Let $x$ and $y$ be variables.**";
+        auto doc = ftxui::ext::parse_markdown(raw);
+        TEST_ASSERT(!doc.empty());
+        const auto &spans = doc[0].spans;
+        for (const auto &span : spans) {
+            TEST_ASSERT(span.text.find("**") == std::string::npos);
+        }
+        TEST_ASSERT(spans.size() == 5);
+        TEST_ASSERT(spans[0].kind == ftxui::ext::MdInlineKind::Bold);
+        TEST_ASSERT(spans[0].text == "Let ");
+        TEST_ASSERT(spans[1].kind == ftxui::ext::MdInlineKind::Math);
+        TEST_ASSERT(spans[1].emphasized == true);
+        TEST_ASSERT(spans[1].text == "x");
+        TEST_ASSERT(spans[2].kind == ftxui::ext::MdInlineKind::Bold);
+        TEST_ASSERT(spans[2].text == " and ");
+        TEST_ASSERT(spans[3].kind == ftxui::ext::MdInlineKind::Math);
+        TEST_ASSERT(spans[3].emphasized == true);
+        TEST_ASSERT(spans[3].text == "y");
+        TEST_ASSERT(spans[4].kind == ftxui::ext::MdInlineKind::Bold);
+        TEST_ASSERT(spans[4].text == " be variables.");
+    }
+
+    // 3. Immediately wrapped: **$E=mc^2$**
+    {
+        std::string raw = "**$E=mc^2$**";
+        auto doc = ftxui::ext::parse_markdown(raw);
+        TEST_ASSERT(!doc.empty());
+        const auto &spans = doc[0].spans;
+        TEST_ASSERT(spans.size() == 1);
+        TEST_ASSERT(spans[0].kind == ftxui::ext::MdInlineKind::Math);
+        TEST_ASSERT(spans[0].emphasized == true);
+        TEST_ASSERT(spans[0].text == "E=mc^2");
+    }
+
+    // 4. Italic wrapping math: *Note: $x > 0$ holds.*
+    {
+        std::string raw = "*Note: $x > 0$ holds.*";
+        auto doc = ftxui::ext::parse_markdown(raw);
+        TEST_ASSERT(!doc.empty());
+        const auto &spans = doc[0].spans;
+        for (const auto &span : spans) {
+            TEST_ASSERT(span.text.find('*') == std::string::npos);
+        }
+        TEST_ASSERT(spans.size() == 3);
+        TEST_ASSERT(spans[0].kind == ftxui::ext::MdInlineKind::Italic);
+        TEST_ASSERT(spans[1].kind == ftxui::ext::MdInlineKind::Math);
+        TEST_ASSERT(spans[1].emphasized == true);
+        TEST_ASSERT(spans[2].kind == ftxui::ext::MdInlineKind::Italic);
+    }
+}
+
 int main() {
     std::cout << "Starting latex_math tests..." << std::endl;
 
@@ -294,6 +376,7 @@ int main() {
     test_render_math_inline_and_display();
     test_complex_katex_reference_formulas();
     test_next_glyph();
+    test_bold_math_interaction();
 
     std::cout << "\n===============================" << std::endl;
     std::cout << "Tests passed: " << g_passed << std::endl;
