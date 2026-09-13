@@ -2137,6 +2137,40 @@ namespace ftxui::ext
             return false;
         }
 
+        // Detect if content inside $...$ is actually English prose / currency text
+        // mistakenly captured between two $ symbols.
+        bool is_likely_prose_not_math(std::string_view body)
+        {
+            // If it contains markdown formatting tokens like bold or italic, it's prose
+            if (body.find("**") != std::string_view::npos ||
+                body.find("__") != std::string_view::npos)
+                return true;
+
+            size_t space_count = 0;
+            bool has_math_indicator = false;
+            for (size_t i = 0; i < body.size(); ++i)
+            {
+                const char c = body[i];
+                if (c == ' ')
+                {
+                    ++space_count;
+                }
+                else if (c == '\\' || c == '^' || c == '_' || c == '=' ||
+                         c == '+' || c == '<' || c == '>' || c == '{' ||
+                         c == '}')
+                {
+                    has_math_indicator = true;
+                }
+            }
+
+            // 3 or more spaces (4+ words) without a single math operator or TeX macro
+            // indicates ordinary natural language prose.
+            if (space_count >= 3 && !has_math_indicator)
+                return true;
+
+            return false;
+        }
+
         size_t backtick_run(std::string_view text, size_t pos)
         {
             size_t n = 0;
@@ -2218,27 +2252,63 @@ namespace ftxui::ext
             }
             else
             {
+                // Pandoc / CommonMark rule: Opening $ must NOT be followed by whitespace.
+                if (open + 1 >= text.size() ||
+                    std::isspace(static_cast<unsigned char>(text[open + 1])))
+                {
+                    scan_pos = open + 1;
+                    continue;
+                }
+
+                // GFM rule: Opening $ cannot be immediately preceded by an alphanumeric character
+                // without punctuation or whitespace (e.g. foo$bar$ is not math).
+                if (open > 0 && std::isalnum(static_cast<unsigned char>(text[open - 1])))
+                {
+                    scan_pos = open + 1;
+                    continue;
+                }
+
                 // Single $ inline math cannot cross newlines
                 size_t next_newline = text.find('\n', open + 1);
                 size_t close = text.find('$', open + 1);
-                bool found = false;
                 while (close != std::string_view::npos &&
                        (next_newline == std::string_view::npos || close < next_newline))
                 {
-                    // BUG FIX: Ensure closing single $ is not escaped, and neither
+                    // Ensure closing single $ is not escaped, and neither
                     // followed by $ nor preceded by $ (avoiding 2nd dollar of $$).
                     const bool not_escaped = !escaped_at(text, close);
                     const bool not_followed_by_dollar =
                         (close + 1 >= text.size() || text[close + 1] != '$');
                     const bool not_preceded_by_dollar =
                         (close == 0 || text[close - 1] != '$');
-                    if (not_escaped && not_followed_by_dollar && not_preceded_by_dollar)
+
+                    // Pandoc / CommonMark rule 1: Closing $ must NOT be preceded by whitespace.
+                    const bool not_preceded_by_space =
+                        (close > open + 1 &&
+                         !std::isspace(static_cast<unsigned char>(text[close - 1])));
+
+                    // Pandoc / CommonMark rule 2: Closing $ must NOT be followed immediately by a digit (0-9).
+                    // E.g. "... $63.1 billion ... $76.4 billion ...": $76.4 is followed by '7', so it is
+                    // opening another currency amount, NOT closing math.
+                    const bool not_followed_by_digit =
+                        (close + 1 >= text.size() ||
+                         !std::isdigit(static_cast<unsigned char>(text[close + 1])));
+
+                    if (not_escaped && not_followed_by_dollar && not_preceded_by_dollar &&
+                        not_preceded_by_space && not_followed_by_digit)
                     {
-                        return std::make_pair(open, close + 1);
+                        std::string_view body = text.substr(open + 1, close - open - 1);
+                        // Prose extraction heuristic: if the span contains Markdown markup (e.g. **)
+                        // or consists of multiple space-separated words without any math operators/macros,
+                        // treat it as prose rather than math.
+                        if (!is_likely_prose_not_math(body))
+                        {
+                            return std::make_pair(open, close + 1);
+                        }
                     }
                     close = text.find('$', close + 1);
                 }
-                // BUG FIX: Unmatched opening $ on this line; advance past open and continue scanning
+                // Unmatched opening $ on this line; advance past open and continue scanning
                 scan_pos = open + 1;
             }
         }

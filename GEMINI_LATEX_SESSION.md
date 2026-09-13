@@ -148,7 +148,7 @@ During deep code analysis, eight specific issues were identified and resolved:
 ## 6. KaTeX & LaTeX Math Verification Suite
 
 - **`tests/latex_math_test.cc`**:
-  - 101 comprehensive test assertions covering span detection, delimiter normalization, inline substitution, 2D display layout, bold/italic wrapping across math, and bug regression tests.
+  - 122 comprehensive test assertions covering span detection, delimiter normalization, inline substitution, 2D display layout, bold/italic wrapping across math, currency delimiter guards, prose extraction, and bug regression tests.
   - Added to `CMakeLists.txt` via `latex_math_test` executable, registered with CTest (`100% tests passed out of 1`).
 - **`math.md`**:
   - Created reference test document including:
@@ -201,4 +201,26 @@ Each chunk was passed independently to `parse_emphasis`. Consequently:
    - Enclosed math formulas are flagged with `emphasized = true` to render in `theme.math_emphasis` color.
 4. **Intraword Underscore Protection**: Intraword underscores in prose (e.g. `variable_name`) are guarded to prevent accidental italicization.
 5. **Regression Coverage**: Added `test_bold_math_interaction()` in `tests/latex_math_test.cc` asserting that `**` markers are never emitted literally when wrapping math expressions (101 unit tests passing).
+
+---
+
+## 9. Addendum: Pandoc/CommonMark Currency Rules & Prose Extraction
+
+### Problem Statement
+When a model output multiple currency amounts on the same line (e.g. `losses of approximately $63.1 billion in 2022 and unrealized **gains** of approximately $76.4 billion in 2021.`), the parser's single-dollar scanner paired the `$` in `$63.1` with the `$` in `$76.4` as a math span. This swallowed the entire English sentence between them into KaTeX math mode, which stripped spaces and rendered it in green math font as `63.1billionin2022andunrealized**gains**ofapproximately`, leaving ` 76.4 billion in 2021.` outside as trailing text.
+
+### Root Cause
+`find_math_span` had no boundary or character context checks for single-dollar inline delimiters. Any two unescaped `$` on a line were naively treated as an opening/closing math delimiter pair, directly colliding with standard currency usage.
+
+### Resolution
+1. **Pandoc / CommonMark Currency Delimiter Guards**:
+   - **Closing Digit Guard**: A closing `$` cannot be followed immediately by a digit `0-9` (`!std::isdigit(text[close + 1])`). In `$76.4 billion`, the character after `$` is `'7'`, immediately identifying it as opening a currency amount rather than closing math.
+   - **Whitespace Guards**:
+     - Opening `$` cannot be followed by whitespace (`!std::isspace(text[open + 1])`).
+     - Closing `$` cannot be preceded by whitespace (`!std::isspace(text[close - 1])`).
+   - **Preceding Alphanumeric Guard (GFM)**: Opening `$` cannot be immediately preceded by an alphanumeric character without punctuation or whitespace.
+2. **Prose Extraction Sanity Check (`is_likely_prose_not_math`)**:
+   - If a candidate span contains Markdown syntax tokens (e.g. `**` or `__`), it is recognized as Markdown prose and rejected from math parsing.
+   - If a candidate span contains 3 or more spaces (4+ words) and contains zero math operators or TeX control sequences (`\`, `^`, `_`, `=`, `+`, `<`, `>`, `{`, `}`), it is recognized as natural language prose and extracted to standard Markdown rendering.
+3. **Regression Coverage**: Added `test_currency_and_prose_extraction()` in `tests/latex_math_test.cc` covering multi-currency sentences, bold/currency interaction, currency ranges, and prose extraction while ensuring legitimate math formulas (`$2x + 1 = 5$`, `$E = mc^2$`) remain unaffected (122 unit tests passing).
 

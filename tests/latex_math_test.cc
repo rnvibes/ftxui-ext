@@ -367,6 +367,91 @@ void test_bold_math_interaction() {
     }
 }
 
+void test_currency_and_prose_extraction() {
+    TEST_CASE("Currency amounts and prose extraction (Pandoc/CommonMark rules)");
+
+    // 1. Exact user scenario: two currency amounts on the same line with bold text in between
+    {
+        std::string raw =
+            "For context, this compares to unrealized losses of approximately $63.1 billion in 2022 and unrealized **gains** of approximately $76.4 billion in 2021.";
+
+        // Should NOT be recognized as math!
+        TEST_ASSERT(!ftxui::ext::contains_math(raw));
+        TEST_ASSERT(!ftxui::ext::find_math_span(raw, 0).has_value());
+
+        // When parsed as markdown:
+        auto doc = ftxui::ext::parse_markdown(raw);
+        TEST_ASSERT(!doc.empty());
+        TEST_ASSERT(doc[0].kind == ftxui::ext::MdBlockKind::Paragraph);
+        const auto &spans = doc[0].spans;
+
+        // No spans should be Math!
+        for (const auto &span : spans) {
+            TEST_ASSERT(span.kind != ftxui::ext::MdInlineKind::Math);
+        }
+
+        // Must have bold "gains"
+        bool found_bold_gains = false;
+        for (const auto &span : spans) {
+            if (span.kind == ftxui::ext::MdInlineKind::Bold && span.text == "gains") {
+                found_bold_gains = true;
+            }
+        }
+        TEST_ASSERT(found_bold_gains);
+
+        // Dollar figures must be preserved literally in text
+        std::string full_text;
+        for (const auto &span : spans) {
+            full_text += span.text;
+        }
+        TEST_ASSERT(full_text.find("$63.1 billion") != std::string::npos);
+        TEST_ASSERT(full_text.find("$76.4 billion") != std::string::npos);
+    }
+
+    // 2. Simple currency range: $50 to $100
+    {
+        std::string raw = "The item costs between $50 and $100.";
+        TEST_ASSERT(!ftxui::ext::contains_math(raw));
+        TEST_ASSERT(!ftxui::ext::find_math_span(raw, 0).has_value());
+    }
+
+    // 3. Multiple currency amounts: $10, $20, and $30
+    {
+        std::string raw = "Prices are $10, $20, and $30 each.";
+        TEST_ASSERT(!ftxui::ext::contains_math(raw));
+    }
+
+    // 4. Space after opening dollar or space before closing dollar
+    {
+        std::string raw = "This is $ not math $ at all.";
+        TEST_ASSERT(!ftxui::ext::contains_math(raw));
+    }
+
+    // 5. English prose mistakenly enclosed in $ ... $
+    {
+        std::string raw = "Here is $an ordinary english sentence with words$ in it.";
+        TEST_ASSERT(!ftxui::ext::contains_math(raw));
+    }
+
+    // 6. Legitimate math with digits must STILL work
+    {
+        std::string raw = "Solve $2x + 1 = 5$ for x.";
+        TEST_ASSERT(ftxui::ext::contains_math(raw));
+        auto span = ftxui::ext::find_math_span(raw, 0);
+        TEST_ASSERT(span.has_value());
+        TEST_ASSERT(raw.substr(span->first, span->second - span->first) == "$2x + 1 = 5$");
+    }
+
+    // 7. Legitimate math with space and variables must STILL work
+    {
+        std::string raw = "Formula is $E = mc^2$ today.";
+        TEST_ASSERT(ftxui::ext::contains_math(raw));
+        auto span = ftxui::ext::find_math_span(raw, 0);
+        TEST_ASSERT(span.has_value());
+        TEST_ASSERT(raw.substr(span->first, span->second - span->first) == "$E = mc^2$");
+    }
+}
+
 int main() {
     std::cout << "Starting latex_math tests..." << std::endl;
 
@@ -377,6 +462,7 @@ int main() {
     test_complex_katex_reference_formulas();
     test_next_glyph();
     test_bold_math_interaction();
+    test_currency_and_prose_extraction();
 
     std::cout << "\n===============================" << std::endl;
     std::cout << "Tests passed: " << g_passed << std::endl;
