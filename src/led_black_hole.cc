@@ -50,36 +50,30 @@ ftxui::Color color_for_ergosphere_particle(float sparkle_val) {
 }
 
 float integrate_bend_kerr(float b_in, float mass, float a_spin, float r_plus) {
-  // In the equatorial plane (theta = pi/2), null geodesics in Kerr metric satisfy:
-  // (dr/dlambda)^2 = R(r) = (r^2 + a^2 - a*b)^2 - Delta*(b - a)^2
-  // dphi/dlambda = -(a - b) + a*(r^2 + a^2 - a*b)/Delta = (b - a) + a*(2*M*r - a*(b - a))/Delta
-  // With u = 1/r, du/dphi = (du/dlambda) / (dphi/dlambda) = -(1/r^2)(dr/dlambda) / (dphi/dlambda)
-  // We integrate the second-order ODE d^2u / dphi^2 using standard 4th-order Runge-Kutta.
-  // For stability and smoothness across prograde and retrograde impact parameters:
   const double M = static_cast<double>(mass);
   const double a = static_cast<double>(a_spin);
   const double b = static_cast<double>(b_in);
+  const double abs_b = std::abs(b);
+  if (abs_b < 1e-4) return -1.0f;
   const double u_horizon = 1.0 / static_cast<double>(r_plus);
 
-  // Initial conditions at r -> infinity (u -> 0):
-  // Impact parameter b = L/E. As r -> infinity, du/dphi = 1/b.
+  // Initial conditions: ray coming in from infinity towards black hole.
+  // In coordinates where u = 1/r, du/dphi starts positive as r decreases.
   double u = 0.0;
-  double v = 1.0 / b;
+  double v = 1.0 / abs_b;
   double phi = 0.0;
   constexpr double kDPhi = 0.0025;
   constexpr int kMaxSteps = 6000;
 
-  // dv/dphi = -u + 3*M*u^2 + Kerr spin corrections:
-  // High-order expansion in u of the equatorial Kerr null geodesic equation:
-  // d^2u/dphi^2 = -u + 3*M*u^2 - 2*a*M*u^3/b - 3*a^2*u^3 + 5*M*a^2*u^4 ...
-  // Full algebraic form for equatorial Kerr:
-  const auto dv_dphi = [M, a, b](double uu) -> double {
+  // dv/dphi: equatorial Kerr null geodesic equation in u = 1/r
+  // Prograde (b > 0) has constructive frame-dragging; retrograde (b < 0) has opposing frame-dragging.
+  const double sign_b = (b >= 0.0) ? 1.0 : -1.0;
+  const auto dv_dphi = [M, a, abs_b, sign_b](double uu) -> double {
     const double uu2 = uu * uu;
-    // Leading Schwarzschild term:
+    // Schwarzschild term
     double res = -uu + 3.0 * M * uu2;
-    // Frame-dragging / spin interaction term (depends on sign of b relative to a):
-    const double inv_b = (std::abs(b) > 1e-6) ? (1.0 / b) : 0.0;
-    res += -2.0 * a * M * uu2 * uu * inv_b - 3.0 * (a * a) * uu2 * uu + 5.0 * M * (a * a) * uu2 * uu2;
+    // Frame-dragging spin interaction term
+    res += -2.0 * a * sign_b * M * uu2 * uu / abs_b - 3.0 * (a * a) * uu2 * uu + 5.0 * M * (a * a) * uu2 * uu2;
     return res;
   };
 
@@ -416,10 +410,15 @@ void LEDBlackHole::render(TFrameBuffer& matrix) {
         }
       }
 
-      // In Kerr spacetime, prograde vs retrograde critical impact parameters create the asymmetric D-shaped shadow.
-      // nx > 0 corresponds to prograde photon orbit side, nx < 0 to retrograde.
-      const bool is_prograde = (nx >= 0.0f);
-      const float b_critical = is_prograde ? b_crit_pro : b_crit_ret;
+      // In Kerr spacetime, the shadow boundary and photon capture parameters vary continuously
+      // with azimuth angle around the black hole. nx > 0 is prograde, nx < 0 is retrograde,
+      // and vertical rays (nx = 0) smoothly transition between them.
+      const float phi_screen = std::atan2(ny, nx);
+      const float cos_phi = std::cos(phi_screen); // +1 on prograde side, -1 on retrograde side
+      const float t_dir = std::clamp(0.5f * (1.0f + cos_phi), 0.0f, 1.0f); // 1 for prograde, 0 for retrograde
+
+      // Continuous critical impact parameter around the perimeter
+      const float b_critical = t_dir * b_crit_pro + (1.0f - t_dir) * b_crit_ret;
 
       if (b <= b_critical) continue;
 
@@ -428,13 +427,15 @@ void LEDBlackHole::render(TFrameBuffer& matrix) {
         continue;
       }
 
-      const float inv_b_rel_span = is_prograde ? inv_b_span_pro : inv_b_span_ret;
-      const float b_rel = (b - b_critical) * inv_b_rel_span;
+      // Smoothly interpolate relative span and bend between prograde and retrograde
+      const float inv_b_span = t_dir * inv_b_span_pro + (1.0f - t_dir) * inv_b_span_ret;
+      const float b_rel = (b - b_critical) * inv_b_span;
       const int table_idx = std::clamp(static_cast<int>(std::sqrt(std::max(0.0f, b_rel)) * kBendTableSize), 0, kBendTableSize - 1);
-      const float bend = is_prograde ? bend_table_prograde_[table_idx] : bend_table_retrograde_[table_idx];
+      const float bend_pro = bend_table_prograde_[table_idx];
+      const float bend_ret = bend_table_retrograde_[table_idx];
+      const float bend = t_dir * bend_pro + (1.0f - t_dir) * bend_ret;
       if (bend < 0.0f) continue;
 
-      const float phi_screen = std::atan2(ny, nx);
       const float sin_phi = std::abs(std::sin(phi_screen));
 
       const float compression = 1.0f + lensing_strength_.load() * bend * (0.4f + 0.6f * sin_phi);
