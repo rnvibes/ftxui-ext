@@ -46,6 +46,15 @@ class LEDBlackHole {
 
   void set_disk_radius(float radius);
 
+  void set_spin(float spin);
+  float spin() const { return spin_.load(); }
+
+  float r_outer_horizon() const;
+  float r_inner_horizon() const;
+  float r_ergosphere(float theta = 1.57079632679f) const;
+  float b_critical_prograde() const;
+  float b_critical_retrograde() const;
+
   void set_draw_mode(DrawMode mode) { draw_mode_.store(mode); }
   DrawMode draw_mode() const { return draw_mode_.load(); }
 
@@ -80,11 +89,11 @@ class LEDBlackHole {
   const float r_horizon_;
   float r_outer_;
   const float mass_;
-  const float b_critical_;
   float b_max_;
 
   float phase_{0.0f};
 
+  std::atomic<float> spin_{0.85f};
   std::atomic<float> tilt_squash_{0.20f};
   std::atomic<float> zoom_scale_{0.85f};
   std::atomic<float> rear_scale_{0.85f};
@@ -97,7 +106,8 @@ class LEDBlackHole {
   std::vector<Particle> particles_;
   std::vector<ErgosphereParticle> ergo_particles_;
 
-  std::vector<float> bend_table_;
+  std::vector<float> bend_table_prograde_;
+  std::vector<float> bend_table_retrograde_;
   std::vector<float> nx_table_;
   std::vector<float> nx2_table_;
   std::vector<ftxui::Color> density_;

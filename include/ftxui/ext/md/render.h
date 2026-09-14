@@ -28,6 +28,8 @@ namespace ftxui::ext
         // one terminal row per source line. This lets a view virtualize their
         // visible rows without changing j/k semantics.
         bool atomic = false;
+        // Plain-text representation of this row's content, for search matching.
+        std::string text;
     };
 
     struct MdRenderOptions

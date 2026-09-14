@@ -188,6 +188,18 @@ namespace ftxui::ext
     {
       action = VimAction::EnterCommandMode;
     }
+    else if (CharIs(event, '/'))
+    {
+      return VimEvent{VimAction::SearchForward, 1};
+    }
+    else if (CharIs(event, 'n'))
+    {
+      action = VimAction::SearchNext;
+    }
+    else if (CharIs(event, 'N'))
+    {
+      action = VimAction::SearchPrevious;
+    }
     else if (event == ftxui::Event::Return || CharIs(event, 'o'))
     {
       action = VimAction::Activate;

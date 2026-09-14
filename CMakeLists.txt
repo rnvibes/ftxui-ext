@@ -57,5 +57,9 @@ if(FTXUI_EXT_BUILD_TESTS)
   add_executable(latex_math_test tests/latex_math_test.cc)
   target_link_libraries(latex_math_test PRIVATE ftxui-ext dom component screen)
   add_test(NAME latex_math_test COMMAND latex_math_test)
+
+  add_executable(led_black_hole_test tests/led_black_hole_test.cc)
+  target_link_libraries(led_black_hole_test PRIVATE ftxui-ext dom component screen)
+  add_test(NAME led_black_hole_test COMMAND led_black_hole_test)
 endif()
 

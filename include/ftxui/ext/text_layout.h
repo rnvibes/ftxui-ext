@@ -38,35 +38,56 @@ namespace ftxui::ext
         return std::max(element->requirement().min_y, 1);
     }
 
-    // Greedy word wrap. Each row is an hbox so neighbouring words keep their
-    // own styles instead of collapsing into one decorated string.
-    inline std::vector<ftxui::Element> wrap_words(std::vector<Word> words, int width)
+    struct WrappedRow
+    {
+        ftxui::Element element;
+        std::string text;
+    };
+
+    // Greedy word wrap preserving line text.
+    inline std::vector<WrappedRow> wrap_words_with_text(std::vector<Word> words, int width)
     {
         width = std::max(width, 8);
-        std::vector<ftxui::Element> rows;
+        std::vector<WrappedRow> rows;
         ftxui::Elements row;
+        std::string row_text;
         int used = 0;
         for (Word& word : words)
         {
             const int w = static_cast<int>(ftxui::string_width(word.text));
             if (!row.empty() && used + 1 + w > width)
             {
-                rows.push_back(ftxui::hbox(std::move(row)));
+                rows.push_back({ftxui::hbox(std::move(row)), std::move(row_text)});
                 row.clear();
+                row_text.clear();
                 used = 0;
             }
             if (!row.empty())
             {
                 row.push_back(ftxui::text(" "));
+                row_text += " ";
                 used += 1;
             }
             row.push_back(ftxui::text(word.text) | word.style);
+            row_text += word.text;
             used += w;
         }
         if (!row.empty())
-            rows.push_back(ftxui::hbox(std::move(row)));
+            rows.push_back({ftxui::hbox(std::move(row)), std::move(row_text)});
         if (rows.empty())
-            rows.push_back(ftxui::text(""));
+            rows.push_back({ftxui::text(""), ""});
+        return rows;
+    }
+
+    // Greedy word wrap. Each row is an hbox so neighbouring words keep their
+    // own styles instead of collapsing into one decorated string.
+    inline std::vector<ftxui::Element> wrap_words(std::vector<Word> words, int width)
+    {
+        auto wrapped = wrap_words_with_text(std::move(words), width);
+        std::vector<ftxui::Element> rows;
+        rows.reserve(wrapped.size());
+        for (auto& w : wrapped)
+            rows.push_back(std::move(w.element));
         return rows;
     }
 
@@ -185,7 +206,7 @@ namespace ftxui::ext
     // The bordered code box (╭─╮ with a language label, syntax-highlighted
     // body, wrap-or-truncate handling) shared by the markdown and org
     // renderers so code looks identical everywhere.
-    inline std::vector<ftxui::Element> code_box(
+    inline std::vector<WrappedRow> code_box_rows(
         std::string_view literal, std::string_view language, int width,
         bool wrap, bool& truncated, ftxui::Color border, ftxui::Color code_fg,
         ftxui::Color code_bg, ftxui::Color truncation,
@@ -193,7 +214,7 @@ namespace ftxui::ext
     {
         const int outer = std::max(width, 12);
         const int inner = outer - 2;
-        std::vector<ftxui::Element> rows;
+        std::vector<WrappedRow> rows;
 
         std::string top = "╭";
         if (!language.empty())
@@ -201,7 +222,7 @@ namespace ftxui::ext
         while (static_cast<int>(ftxui::string_width(top)) < outer - 1)
             top += "─";
         top += "╮";
-        rows.push_back(ftxui::text(top) | ftxui::color(border));
+        rows.push_back({ftxui::text(top) | ftxui::color(border), ""});
 
         auto body_row = [&](ftxui::Element content)
         {
@@ -257,13 +278,9 @@ namespace ftxui::ext
                             curr = tok_end;
                         }
                         if (sp.end_byte <= line_end)
-                        {
                             ++s_idx;
-                        }
                         else
-                        {
                             break;
-                        }
                     }
                     if (curr < line_end)
                     {
@@ -324,11 +341,11 @@ namespace ftxui::ext
                     size_t atom_i = 0;
                     if (atoms.empty())
                     {
-                        rows.push_back(body_row(ftxui::hbox({
+                        rows.push_back({body_row(ftxui::hbox({
                             ftxui::text("  ") | ftxui::color(border),
                             ftxui::text(std::string(static_cast<size_t>(std::max(inner - 2, 0)), ' ')) |
                                 ftxui::color(code_fg),
-                        })));
+                        })), ""});
                     }
                     else
                     {
@@ -338,6 +355,7 @@ namespace ftxui::ext
                             const int budget = std::max(inner - prefix_w, 1);
                             int used = 0;
                             Elements line_elems;
+                            std::string subline_text;
                             line_elems.push_back(
                                 ftxui::text(is_first ? "  " : ("↳ " + std::string(static_cast<size_t>(indent_spaces), ' '))) |
                                 ftxui::color(border));
@@ -348,6 +366,7 @@ namespace ftxui::ext
                                 if (used + atom.width <= budget)
                                 {
                                     line_elems.push_back(ftxui::text(std::string(atom.text)) | atom.style);
+                                    subline_text += atom.text;
                                     used += atom.width;
                                     ++atom_i;
                                 }
@@ -361,6 +380,7 @@ namespace ftxui::ext
                                     }
                                     const int cut_w = static_cast<int>(ftxui::string_width(cut));
                                     line_elems.push_back(ftxui::text(cut) | atom.style);
+                                    subline_text += cut;
                                     used += cut_w;
                                     atoms[atom_i].text = atom.text.substr(cut.size());
                                     atoms[atom_i].width = static_cast<int>(ftxui::string_width(std::string(atoms[atom_i].text)));
@@ -377,7 +397,7 @@ namespace ftxui::ext
                             {
                                 line_elems.push_back(ftxui::text(std::string(static_cast<size_t>(pad), ' ')));
                             }
-                            rows.push_back(body_row(ftxui::hbox(std::move(line_elems))));
+                            rows.push_back({body_row(ftxui::hbox(std::move(line_elems))), std::move(subline_text)});
                             is_first = false;
                         }
                     }
@@ -413,7 +433,7 @@ namespace ftxui::ext
                             }
                         }
                         line_elems.push_back(ftxui::text("›") | ftxui::bold | ftxui::color(truncation));
-                        rows.push_back(body_row(ftxui::hbox(std::move(line_elems))));
+                        rows.push_back({body_row(ftxui::hbox(std::move(line_elems))), std::string(line)});
                     }
                     else
                     {
@@ -427,7 +447,7 @@ namespace ftxui::ext
                         {
                             line_elems.push_back(ftxui::text(std::string(static_cast<size_t>(pad), ' ')));
                         }
-                        rows.push_back(body_row(ftxui::hbox(std::move(line_elems))));
+                        rows.push_back({body_row(ftxui::hbox(std::move(line_elems))), std::string(line)});
                     }
                 }
 
@@ -436,14 +456,29 @@ namespace ftxui::ext
                 start = nl + 1;
             }
 
-            rows.push_back(ftxui::text("╰" + [&]
-                                       {
-                                           std::string dashes;
-                                           for (int i = 0; i < inner; ++i)
-                                               dashes += "─";
-                                           return dashes;
-                                       }() + "╯") |
-                           ftxui::color(border));
+            rows.push_back({ftxui::text("╰" + [&]
+                                        {
+                                            std::string dashes;
+                                            for (int i = 0; i < inner; ++i)
+                                                dashes += "─";
+                                            return dashes;
+                                        }() + "╯") |
+                            ftxui::color(border), ""});
+        return rows;
+    }
+
+    inline std::vector<ftxui::Element> code_box(
+        std::string_view literal, std::string_view language, int width,
+        bool wrap, bool& truncated, ftxui::Color border, ftxui::Color code_fg,
+        ftxui::Color code_bg, ftxui::Color truncation,
+        const ftxui::ext::SyntaxStyle& syntax_style)
+    {
+        auto wrapped = code_box_rows(literal, language, width, wrap, truncated,
+                                     border, code_fg, code_bg, truncation, syntax_style);
+        std::vector<ftxui::Element> rows;
+        rows.reserve(wrapped.size());
+        for (auto& w : wrapped)
+            rows.push_back(std::move(w.element));
         return rows;
     }
 

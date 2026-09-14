@@ -71,7 +71,7 @@ namespace ftxui::ext
         // Greedy wrap and element-height measurement come from the shared
         // text_layout.h so the org renderer lays text out identically.
 
-        Elements render_heading(const MdBlock &block, const MdTheme &theme, int width)
+        std::vector<WrappedRow> render_heading(const MdBlock &block, const MdTheme &theme, int width)
         {
             const ftxui::Color color = block.level <= 1   ? theme.heading1
                                        : block.level == 2 ? theme.heading2
@@ -79,27 +79,24 @@ namespace ftxui::ext
             std::vector<Word> words = words_of(block.spans, theme);
             for (Word &word : words)
                 word.style = ftxui::bold | ftxui::color(color);
-            Elements rows = wrap_words(std::move(words), width);
+            std::vector<WrappedRow> rows = wrap_words_with_text(std::move(words), width);
             if (block.level <= 1)
-                rows.push_back(ftxui::separator() | ftxui::color(color));
+                rows.push_back({ftxui::separator() | ftxui::color(color), ""});
             return rows;
         }
-
-
-
 
         // One element per terminal line, borders included, so every line a
         // block occupies gets its own gutter number. A single opaque element
         // would leave blanks in the number line, and relative numbers stop
         // being arithmetic you can trust the moment that happens.
-        Elements render_code(const MdBlock &block, const MdTheme &theme, int width,
-                             bool wrap, bool &truncated)
+        std::vector<WrappedRow> render_code(const MdBlock &block, const MdTheme &theme, int width,
+                                            bool wrap, bool &truncated)
         {
             // the bordered box is shared with the org renderer
-            return ftxui::ext::code_box(block.literal, block.language, width, wrap,
-                                        truncated, theme.border, theme.code_fg,
-                                        theme.code_bg, theme.truncation,
-                                        theme.syntax_style());
+            return ftxui::ext::code_box_rows(block.literal, block.language, width, wrap,
+                                             truncated, theme.border, theme.code_fg,
+                                             theme.code_bg, theme.truncation,
+                                             theme.syntax_style());
         }
 
         // Flatten a cell to plain text: a table cell is measured in columns, so
@@ -112,15 +109,21 @@ namespace ftxui::ext
             return out;
         }
 
+        struct TableUnit
+        {
+            Element element;
+            int height = 1;
+            std::string text;
+        };
 
         // One unit per table row (plus the header and its rule), so the
         // cursor can step across a table and every row carries its own
         // number. A cell that wraps makes its row taller; the row is still
         // one unit.
-        std::vector<std::pair<Element, int>> render_table(const MdBlock &block,
-                                                          const MdTheme &theme, int width)
+        std::vector<TableUnit> render_table(const MdBlock &block,
+                                            const MdTheme &theme, int width)
         {
-            std::vector<std::pair<Element, int>> units;
+            std::vector<TableUnit> units;
             const std::size_t columns = block.headers.empty()
                                             ? (block.rows.empty() ? 0 : block.rows[0].size())
                                             : block.headers.size();
@@ -144,7 +147,7 @@ namespace ftxui::ext
             const std::vector<int> widths =
                 table_column_widths(grid, columns, std::max(width, 20));
 
-            auto row_element = [&](const std::vector<std::string> &cells, bool header)
+            auto row_element = [&](const std::vector<std::string> &cells, bool header) -> TableUnit
             {
                 // Every cell wraps to its own column width; the row is as tall
                 // as its tallest cell, and shorter cells are padded so the
@@ -157,6 +160,12 @@ namespace ftxui::ext
                     tallest = std::max(tallest, wrapped[i].size());
                 }
                 Elements lines;
+                std::string row_joined;
+                for (std::size_t c = 0; c < columns; ++c)
+                {
+                    if (c > 0) row_joined += " | ";
+                    row_joined += cells[c];
+                }
                 for (std::size_t line = 0; line < tallest; ++line)
                 {
                     Elements row;
@@ -175,8 +184,9 @@ namespace ftxui::ext
                     }
                     lines.push_back(ftxui::hbox(std::move(row)));
                 }
-                return std::make_pair(ftxui::vbox(std::move(lines)),
-                                      static_cast<int>(tallest));
+                return TableUnit{ftxui::vbox(std::move(lines)),
+                                 static_cast<int>(tallest),
+                                 std::move(row_joined)};
             };
 
             std::size_t index = 0;
@@ -189,7 +199,7 @@ namespace ftxui::ext
                 std::string rule;
                 for (int i = 0; i < total; ++i)
                     rule += "─";
-                units.push_back({ftxui::text(rule) | ftxui::color(theme.table_border), 1});
+                units.push_back({ftxui::text(rule) | ftxui::color(theme.table_border), 1, ""});
                 index = 1;
             }
             for (; index < grid.size(); ++index)
@@ -199,16 +209,16 @@ namespace ftxui::ext
 
         // One row per item, so a list scrolls and numbers like prose rather
         // than being one opaque block.
-        Elements render_list(const MdBlock &block, const MdTheme &theme, int width)
+        std::vector<WrappedRow> render_list(const MdBlock &block, const MdTheme &theme, int width)
         {
-            Elements rows;
+            std::vector<WrappedRow> rows;
             int number = block.start;
             for (const std::vector<MdInline> &item : block.items)
             {
                 const std::string marker =
                     block.ordered ? std::to_string(number++) + ". " : "• ";
                 const int indent = static_cast<int>(ftxui::string_width(marker));
-                Elements wrapped = wrap_words(words_of(item, theme), width - indent);
+                auto wrapped = wrap_words_with_text(words_of(item, theme), width - indent);
                 for (std::size_t i = 0; i < wrapped.size(); ++i)
                 {
                     Element lead = i == 0
@@ -216,24 +226,26 @@ namespace ftxui::ext
                                              ftxui::color(theme.list_marker)
                                        : ftxui::text(std::string(
                                              static_cast<std::size_t>(indent), ' '));
-                    rows.push_back(ftxui::hbox({std::move(lead), std::move(wrapped[i])}));
+                    std::string row_text = (i == 0 ? marker : std::string(static_cast<std::size_t>(indent), ' ')) + wrapped[i].text;
+                    rows.push_back({ftxui::hbox({std::move(lead), std::move(wrapped[i].element)}), std::move(row_text)});
                 }
             }
             return rows;
         }
 
-        Elements render_quote(const MdBlock &block, const MdTheme &theme, int width)
+        std::vector<WrappedRow> render_quote(const MdBlock &block, const MdTheme &theme, int width)
         {
-            Elements rows;
+            std::vector<WrappedRow> rows;
             std::vector<Word> words = words_of(block.spans, theme);
             for (Word &word : words)
                 word.style = ftxui::italic | ftxui::color(theme.blockquote);
-            for (Element &line : wrap_words(std::move(words), width - 2))
+            for (auto &line : wrap_words_with_text(std::move(words), width - 2))
             {
-                rows.push_back(ftxui::hbox({
+                std::string row_text = "│ " + line.text;
+                rows.push_back({ftxui::hbox({
                     ftxui::text("│ ") | ftxui::bold | ftxui::color(theme.blockquote),
-                    std::move(line),
-                }));
+                    std::move(line.element),
+                }), std::move(row_text)});
             }
             return rows;
         }
@@ -245,22 +257,22 @@ namespace ftxui::ext
     {
         std::vector<MdRow> rows;
         int index = -1;
-        auto push_lines = [&](Elements lines)
+        auto push_lines = [&](std::vector<WrappedRow> lines)
         {
-            for (Element &line : lines)
-                rows.push_back({std::move(line), 1, index, false});
+            for (WrappedRow &line : lines)
+                rows.push_back({std::move(line.element), 1, index, false, false, std::move(line.text)});
         };
-        auto push_block = [&](Element element, bool truncated = false)
+        auto push_block = [&](Element element, std::string text, bool truncated = false)
         {
             const int height = element_height(element);
-            rows.push_back({std::move(element), height, index, truncated});
+            rows.push_back({std::move(element), height, index, truncated, false, std::move(text)});
         };
 
         for (const MdBlock &block : doc)
         {
             ++index;
             if (!rows.empty())
-                rows.push_back({ftxui::text(""), 1, index, false});
+                rows.push_back({ftxui::text(""), 1, index, false, false, ""});
             switch (block.kind)
             {
             case MdBlockKind::Heading:
@@ -272,20 +284,21 @@ namespace ftxui::ext
                 // numbering its interior lines would imply they are separately
                 // addressable when they are not.
                 bool truncated = false;
-                Elements lines = render_code(block, theme, viewport_width,
-                                             options.wrap_code, truncated);
-                for (Element &line : lines)
-                    rows.push_back({std::move(line), 1, index, truncated, true});
+                auto lines = render_code(block, theme, viewport_width,
+                                         options.wrap_code, truncated);
+                for (WrappedRow &line : lines)
+                    rows.push_back({std::move(line.element), 1, index, truncated, true, std::move(line.text)});
                 break;
             }
             case MdBlockKind::Math:
                 push_block(ftxui::ext::render_math(block.literal,
                                               ftxui::color(theme.math_fg),
-                                              ftxui::ext::MathMode::Display));
+                                              ftxui::ext::MathMode::Display),
+                           block.literal);
                 break;
             case MdBlockKind::Table:
-                for (auto &[element, height] : render_table(block, theme, viewport_width))
-                    rows.push_back({std::move(element), height, index, false});
+                for (auto &[element, height, text] : render_table(block, theme, viewport_width))
+                    rows.push_back({std::move(element), height, index, false, false, std::move(text)});
                 break;
             case MdBlockKind::List:
                 push_lines(render_list(block, theme, viewport_width));
@@ -294,10 +307,10 @@ namespace ftxui::ext
                 push_lines(render_quote(block, theme, viewport_width));
                 break;
             case MdBlockKind::Rule:
-                rows.push_back({ftxui::separator() | ftxui::color(theme.border), 1, index, false});
+                rows.push_back({ftxui::separator() | ftxui::color(theme.border), 1, index, false, false, "---"});
                 break;
             case MdBlockKind::Paragraph:
-                push_lines(wrap_words(words_of(block.spans, theme), viewport_width));
+                push_lines(wrap_words_with_text(words_of(block.spans, theme), viewport_width));
                 break;
             }
         }

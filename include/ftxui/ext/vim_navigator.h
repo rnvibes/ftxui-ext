@@ -33,6 +33,9 @@ namespace ftxui::ext
     OpenFold,         // zo
     CloseFold,        // zc
     EnterCommandMode, // : — hands off to the app's `:command arg` line
+    SearchForward,    // / — hands off to the view/app's `/search` line
+    SearchNext,       // n — repeat search forward
+    SearchPrevious,   // N — repeat search backward
     Activate,         // Enter / o — open whatever the cursor is on
     Elaborate,        // <C-e> — contextual inquiry / follow-up
     // <C-w>h/j/k/l — move focus between tiles. Vim's window vocabulary, and

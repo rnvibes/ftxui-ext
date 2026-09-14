@@ -27,6 +27,13 @@ ftxui::Element CursorOverlay(ftxui::Element child, const int* row,
                              const int* col, const bool* enabled,
                              VisibleGrid* out_grid, ftxui::Color line_bg,
                              const bool* line_enabled, const int* line_rows,
-                             bool invert = false);
+                             bool invert = false,
+                             const std::string* search_pattern = nullptr,
+                             const bool* hlsearch_enabled = nullptr,
+                             ftxui::Color search_match_bg = ftxui::Color::Yellow,
+                             ftxui::Color search_match_fg = ftxui::Color::Black,
+                             const int* current_match_row = nullptr,
+                             const int* current_match_col = nullptr,
+                             const int* current_match_len = nullptr);
 
 }  // namespace ftxui::ext
