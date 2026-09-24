@@ -389,8 +389,13 @@ namespace ftxui::ext
                 const char marker = ticks >= 3 ? '`' : '~';
                 const std::size_t width = ticks >= 3 ? ticks : tildes;
                 MdBlock block;
-                block.kind = MdBlockKind::CodeBlock;
                 block.language = std::string(trim(stripped.substr(width)));
+                // A stage fence is a status readout, not code: its own block
+                // kind, so the renderer draws a distinct box rather than a code
+                // block's syntax-highlighted frame.
+                block.kind = (block.language == "stage")
+                                 ? MdBlockKind::Stage
+                                 : MdBlockKind::CodeBlock;
                 // An unterminated fence runs to the end of the source: mid-stream
                 // that is the common case, and showing the partial code block
                 // beats dumping raw backticks until the closer arrives.

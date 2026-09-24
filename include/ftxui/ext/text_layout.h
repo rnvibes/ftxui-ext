@@ -203,6 +203,79 @@ namespace ftxui::ext
         return width;
     }
 
+    // The stage box: a heavy border (┏━┓/┃/┗━┛) with a label and one row per
+    // status line, for the transcript's pipeline readout -- tool calls,
+    // retrieval, expansion. Its own colours, so it never reads as a code block.
+    inline std::vector<WrappedRow> stage_box_rows(
+        std::string_view literal, std::string_view label, int width,
+        ftxui::Color border, ftxui::Color fg, ftxui::Color bg)
+    {
+        std::vector<std::string> lines;
+        for (std::size_t start = 0; start <= literal.size();)
+        {
+            const std::size_t nl = literal.find('\n', start);
+            const std::size_t end = nl == std::string_view::npos ? literal.size() : nl;
+            lines.emplace_back(literal.substr(start, end - start));
+            if (nl == std::string_view::npos)
+                break;
+            start = nl + 1;
+        }
+        if (lines.empty())
+            lines.emplace_back();
+
+        int content = 0;
+        for (const std::string &l : lines)
+            content = std::max(content, ftxui::string_width(l));
+        const int outer = std::min(std::max(width, 12), content + 4);
+        const int inner = std::max(outer - 2, 1);
+
+        std::vector<WrappedRow> rows;
+        std::string top = "\u250f";
+        if (!label.empty())
+            top += " " + std::string(label) + " ";
+        while (static_cast<int>(ftxui::string_width(top)) < outer - 1)
+            top += "\u2501";
+        top += "\u2513";
+        rows.push_back({ftxui::text(top) | ftxui::color(border), ""});
+
+        for (std::string l : lines)
+        {
+            if (static_cast<int>(ftxui::string_width(l)) > inner)
+            {
+                std::string cut;
+                int w = 0;
+                for (std::size_t i = 0; i < l.size();)
+                {
+                    const unsigned char c = static_cast<unsigned char>(l[i]);
+                    const std::size_t n = (c < 0x80) ? 1 : ((c >> 5) == 0x6 ? 2 : ((c >> 4) == 0xe ? 3 : 4));
+                    const std::string ch = l.substr(i, n);
+                    const int cw = ftxui::string_width(ch);
+                    if (w + cw > inner)
+                        break;
+                    cut += ch;
+                    w += cw;
+                    i += n;
+                }
+                l = std::move(cut);
+            }
+            while (static_cast<int>(ftxui::string_width(l)) < inner)
+                l += ' ';
+            rows.push_back({ftxui::hbox({
+                                ftxui::text("\u2503") | ftxui::color(border),
+                                ftxui::text(l) | ftxui::color(fg) | ftxui::bgcolor(bg),
+                                ftxui::text("\u2503") | ftxui::color(border),
+                            }),
+                            ""});
+        }
+
+        std::string bottom = "\u2517";
+        while (static_cast<int>(ftxui::string_width(bottom)) < outer - 1)
+            bottom += "\u2501";
+        bottom += "\u251b";
+        rows.push_back({ftxui::text(bottom) | ftxui::color(border), ""});
+        return rows;
+    }
+
     // The bordered code box (╭─╮ with a language label, syntax-highlighted
     // body, wrap-or-truncate handling) shared by the markdown and org
     // renderers so code looks identical everywhere.

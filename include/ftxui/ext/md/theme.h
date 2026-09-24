@@ -16,6 +16,11 @@ namespace ftxui::ext
         ftxui::Color italic_fg = ftxui::Color::Default;
         ftxui::Color code_fg = ftxui::Color::Yellow;
         ftxui::Color code_bg = ftxui::Color::Black;
+        // The transcript's pipeline box: a heavier border and its own tint, so
+        // a status readout never reads as a code block.
+        ftxui::Color stage_border = ftxui::Color::Cyan;
+        ftxui::Color stage_fg = ftxui::Color::Default;
+        ftxui::Color stage_bg = ftxui::Color::RGB(18, 26, 32);
         ftxui::Color math_fg = ftxui::Color::Green;
         ftxui::Color math_emphasis = ftxui::Color::GreenLight;
         ftxui::Color border = ftxui::Color::GrayDark;

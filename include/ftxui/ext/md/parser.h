@@ -37,6 +37,7 @@ namespace ftxui::ext
         List,       // one contiguous run of bullets or numbers
         Blockquote, // one contiguous run of "> " lines
         Rule,       // --- / *** / ___
+        Stage,      // a stage fence: a bordered status readout, never code
     };
 
     // One table row's cells, each already split into inline spans.

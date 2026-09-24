@@ -99,6 +99,16 @@ namespace ftxui::ext
                                              theme.syntax_style());
         }
 
+        // The transcript's pipeline readout: a heavy box in its own colours,
+        // one row per stage line. Deliberately not render_code -- a status
+        // line must never read as code.
+        std::vector<WrappedRow> render_stage(const MdBlock &block, const MdTheme &theme, int width)
+        {
+            return ftxui::ext::stage_box_rows(block.literal, "pipeline", width,
+                                              theme.stage_border, theme.stage_fg,
+                                              theme.stage_bg);
+        }
+
         // Flatten a cell to plain text: a table cell is measured in columns, so
         // inline math has to become glyphs before any width arithmetic.
         std::string flatten(const std::vector<MdInline> &spans)
@@ -286,6 +296,14 @@ namespace ftxui::ext
                 bool truncated = false;
                 auto lines = render_code(block, theme, viewport_width,
                                          options.wrap_code, truncated);
+                for (WrappedRow &line : lines)
+                    rows.push_back({std::move(line.element), 1, index, truncated, true, std::move(line.text)});
+                break;
+            }
+            case MdBlockKind::Stage:
+            {
+                bool truncated = false;
+                auto lines = render_stage(block, theme, viewport_width);
                 for (WrappedRow &line : lines)
                     rows.push_back({std::move(line.element), 1, index, truncated, true, std::move(line.text)});
                 break;
