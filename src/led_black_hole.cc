@@ -4,105 +4,136 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
-#include <arm_neon.h>
-#endif
+#include <cstdint>
 
 namespace ftxui::ext {
 
 namespace {
-constexpr float kOrbitalConstant = 0.6f;
-constexpr float kInwardDrift = 0.01f;
-constexpr float kRadiusJitter = 0.03f;
-constexpr int kMinParticles = 60;
-constexpr int kMaxParticles = 220;
+
 constexpr float kTwoPi = 6.283185307f;
 constexpr float kPi = 3.14159265f;
 constexpr float kTickSeconds = 0.08f;
+constexpr float kInnerKelvin = 12000.0f;  // blue-white core at the ISCO
+constexpr float kOuterKelvin = 2000.0f;   // orange-red rim
+constexpr float kBigBend = 6.0f * kPi;
 
-ftxui::Color color_for_disk(float u, float doppler) {
-  const float norm_r = std::clamp(u / std::max(doppler, 0.1f), 0.0f, 1.0f);
-
-  if (norm_r < 0.10f) {
-    return ftxui::Color::White;
+// Blackbody colour (Tanner Helland approximation). Evaluated only while the
+// colour LUT is built, never per pixel.
+void kelvin_to_rgb(float kelvin, std::uint8_t& out_r, std::uint8_t& out_g, std::uint8_t& out_b) {
+  const float t = std::clamp(kelvin, 1000.0f, 40000.0f) / 100.0f;
+  float r = 255.0f;
+  float g = 255.0f;
+  float b = 255.0f;
+  if (t <= 66.0f) {
+    r = 255.0f;
+    g = 99.4708025861f * std::log(std::max(t, 1.0f)) - 161.1195681661f;
+    b = (t <= 19.0f) ? 0.0f
+                     : 138.5177312231f * std::log(std::max(t - 10.0f, 1.0f)) - 305.0447927307f;
+  } else {
+    r = 329.698727446f * std::pow(std::max(t - 60.0f, 1.0f), -0.1332047592f);
+    g = 288.1221695283f * std::pow(std::max(t - 60.0f, 1.0f), -0.0755148492f);
+    b = 255.0f;
   }
-  if (norm_r < 0.32f) {
-    return ftxui::Color::RGB(255, 180, 0);
-  }
-  if (norm_r < 0.60f) {
-    return ftxui::Color::RGB(255, 120, 0);
-  }
-  if (norm_r < 0.85f) {
-    return ftxui::Color::RGB(200, 40, 10);
-  }
-  return ftxui::Color::RGB(110, 10, 20);
+  out_r = static_cast<std::uint8_t>(std::clamp(r, 0.0f, 255.0f));
+  out_g = static_cast<std::uint8_t>(std::clamp(g, 0.0f, 255.0f));
+  out_b = static_cast<std::uint8_t>(std::clamp(b, 0.0f, 255.0f));
 }
 
-ftxui::Color color_for_ergosphere_particle(float sparkle_val) {
-  if (sparkle_val > 0.88f) {
-    return ftxui::Color(ftxui::Color::Palette256(195));
-  }
-  if (sparkle_val > 0.75f) {
-    return ftxui::Color(ftxui::Color::Palette256(189));
-  }
-  return ftxui::Color::White;
-}
+// ---------------------------------------------------------------------------
+// Exact equatorial Kerr null geodesic, integrated in an affine parameter.
+//
+// With u = 1/r and phi the Boyer-Lindquist azimuth, and
+//   Q(u) = 1 + (a^2 - b^2) u^2 + 2 M (b - a)^2 u^3
+//   D(u) = 1 - 2 M u + a^2 u^2
+//   K(u) = b (1 - 2 M u) + 2 M a u
+// the orbit obeys (du/dphi)^2 = Q D^2 / K^2. Integrating instead with
+//   du/dtau = v,   dv/dtau = (Q D^2)'/2,   dphi/dtau = K
+// removes the K -> 0 pole and lets v pass smoothly through the perihelion.
+// For a = 0 this reduces to (du/dphi)^2 = 1/b^2 - u^2 + 2 M u^3, whose
+// weak-field deflection is 4M/b and whose capture threshold is 3*sqrt(3) M.
+// ---------------------------------------------------------------------------
+struct RayTrace {
+  bool captured = true;
+  float bend = kBigBend;  // |phi_out| - pi for flyby rays
+  float r_min = 0.0f;     // perihelion radius
+  float r_far = -1.0f;    // radius at the far-side crossing (|phi| = pi)
+};
 
-float integrate_bend_kerr(float b_in, float mass, float a_spin, float r_plus) {
-  const double M = static_cast<double>(mass);
-  const double a = static_cast<double>(a_spin);
-  const double b = static_cast<double>(b_in);
-  const double abs_b = std::abs(b);
-  if (abs_b < 1e-4) return -1.0f;
-  const double u_horizon = 1.0 / static_cast<double>(r_plus);
-
-  // Initial conditions: ray coming in from infinity towards black hole.
-  // In coordinates where u = 1/r, du/dphi starts positive as r decreases.
-  double u = 0.0;
-  double v = 1.0 / abs_b;
-  double phi = 0.0;
-  constexpr double kDPhi = 0.0025;
-  constexpr int kMaxSteps = 6000;
-
-  // dv/dphi: equatorial Kerr null geodesic equation in u = 1/r
-  // Prograde (b > 0) has constructive frame-dragging; retrograde (b < 0) has opposing frame-dragging.
-  const double sign_b = (b >= 0.0) ? 1.0 : -1.0;
-  const auto dv_dphi = [M, a, abs_b, sign_b](double uu) -> double {
-    const double uu2 = uu * uu;
-    // Schwarzschild term
-    double res = -uu + 3.0 * M * uu2;
-    // Frame-dragging spin interaction term
-    res += -2.0 * a * sign_b * M * uu2 * uu / abs_b - 3.0 * (a * a) * uu2 * uu + 5.0 * M * (a * a) * uu2 * uu2;
-    return res;
+RayTrace integrate_ray(float b, float mass, float a, float r_plus) {
+  RayTrace out;
+  const double M = mass;
+  const double A = a;
+  const double B = b;
+  const double u_h = 1.0 / static_cast<double>(r_plus);
+  auto accel = [&](double u, double& v_dot, double& phi_dot) {
+    const double Q = 1.0 + (A * A - B * B) * u * u + 2.0 * M * (B - A) * (B - A) * u * u * u;
+    const double D = 1.0 - 2.0 * M * u + A * A * u * u;
+    const double Qp = 2.0 * (A * A - B * B) * u + 6.0 * M * (B - A) * (B - A) * u * u;
+    const double Dp = -2.0 * M + 2.0 * A * A * u;
+    v_dot = 0.5 * (Qp * D * D + 2.0 * Q * D * Dp);
+    phi_dot = B * (1.0 - 2.0 * M * u) + 2.0 * M * A * u;
   };
-
-  bool escaped = false;
+  const double dt = 0.010 / std::max(1.0, std::abs(B));
+  constexpr int kMaxSteps = 200000;
+  constexpr double kPhiCap = 4.0 * kPi;
+  double u = 0.0;
+  double v = 1.0;
+  double phi = 0.0;
+  double u_max = 0.0;
   for (int i = 0; i < kMaxSteps; ++i) {
+    double k1v = 0.0, k1p = 0.0;
+    accel(u, k1v, k1p);
     const double k1u = v;
-    const double k1v = dv_dphi(u);
-    const double k2u = v + 0.5 * kDPhi * k1v;
-    const double k2v = dv_dphi(u + 0.5 * kDPhi * k1u);
-    const double k3u = v + 0.5 * kDPhi * k2v;
-    const double k3v = dv_dphi(u + 0.5 * kDPhi * k2u);
-    const double k4u = v + kDPhi * k3v;
-    const double k4v = dv_dphi(u + kDPhi * k3u);
+    double k2v = 0.0, k2p = 0.0;
+    accel(u + 0.5 * dt * k1u, k2v, k2p);
+    const double k2u = v + 0.5 * dt * k1v;
+    double k3v = 0.0, k3p = 0.0;
+    accel(u + 0.5 * dt * k2u, k3v, k3p);
+    const double k3u = v + 0.5 * dt * k2v;
+    double k4v = 0.0, k4p = 0.0;
+    accel(u + dt * k3u, k4v, k4p);
+    const double k4u = v + dt * k3v;
 
-    u += (kDPhi / 6.0) * (k1u + 2 * k2u + 2 * k3u + k4u);
-    v += (kDPhi / 6.0) * (k1v + 2 * k2v + 2 * k3v + k4v);
-    phi += kDPhi;
+    const double u_prev = u;
+    const double phi_prev = phi;
+    const double du = dt / 6.0 * (k1u + 2.0 * k2u + 2.0 * k3u + k4u);
+    const double dphi = dt / 6.0 * (k1p + 2.0 * k2p + 2.0 * k3p + k4p);
+    u += du;
+    v += dt / 6.0 * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
+    phi += dphi;
+    u_max = std::max(u_max, u);
+    if (out.r_far < 0.0f) {
+      const double ap = std::abs(phi_prev);
+      const double an = std::abs(phi);
+      if (ap < kPi && an >= kPi) {
+        const double f = (kPi - ap) / std::max(an - ap, 1e-12);
+        const double u_far = u_prev + f * (u - u_prev);
+        out.r_far = static_cast<float>(1.0 / std::max(u_far, 1e-9));
+      }
+    }
 
-    if (u >= u_horizon) return -1.0f;  // Captured by event horizon
-    if (phi > 0.3 && u <= 0.0) {
-      escaped = true;
-      break;
+    const double D = 1.0 - 2.0 * M * u + A * A * u * u;
+    if (u >= u_h || D <= 1e-4) {
+      out.captured = true;
+      return out;
+    }
+    if (u < 0.0) {
+      // Interpolate the crossing back to u = 0 to remove the last-step bias.
+      const double frac = (u_prev > 0.0) ? std::clamp(u_prev / (u_prev - u), 0.0, 1.0) : 0.0;
+      const double phi_out = phi_prev + frac * dphi;
+      out.captured = false;
+      out.bend = static_cast<float>(std::max(0.0, std::abs(phi_out) - kPi));
+      out.r_min = static_cast<float>(1.0 / std::max(u_max, 1e-9));
+      return out;
+    }
+    if (std::abs(phi) > kPhiCap) {
+      break;  // ~3 windings: inside the photon ring
     }
   }
-  if (!escaped) return -1.0f;
-
-  const float bend = static_cast<float>(phi) - kPi;
-  return std::clamp(bend, 0.0f, 3.0f * kPi);
+  out.captured = true;
+  return out;
 }
+
 }  // namespace
 
 LEDBlackHole::LEDBlackHole(int side, unsigned seed)
@@ -111,30 +142,9 @@ LEDBlackHole::LEDBlackHole(int side, unsigned seed)
       r_outer_(side_ * 0.45f),
       mass_(r_horizon_ / 2.0f),
       b_max_(r_outer_ * 1.5f),
-      rng_(seed),
-      nx_table_(static_cast<std::size_t>(side_) * 2u, 0.0f),
-      nx2_table_(static_cast<std::size_t>(side_) * 2u, 0.0f),
-      density_(kRadiusBins * kAngleBins, ftxui::Color::Default),
-      occupied_(kRadiusBins * kAngleBins, false) {
-  build_bend_table();
-
-  const int particle_count = std::clamp(side_ * 3, kMinParticles, kMaxParticles);
-  particles_.resize(static_cast<std::size_t>(particle_count));
-
-  std::uniform_real_distribution<float> angle_dist(0.0f, kTwoPi);
-  std::uniform_real_distribution<float> radius_dist(r_outer_horizon(), r_outer_);
-  std::uniform_real_distribution<float> sparkle_dist(0.7f, 1.0f);
-  for (Particle& p : particles_) {
-    p.angle = angle_dist(rng_);
-    p.radius = radius_dist(rng_);
-    p.sparkle = sparkle_dist(rng_);
-  }
-
-  const int ergo_count = std::clamp(side_ * 2, 45, 85);
-  ergo_particles_.resize(static_cast<std::size_t>(ergo_count));
-  for (ErgosphereParticle& ep : ergo_particles_) {
-    respawn(ep);
-  }
+      rng_(seed) {
+  build_bend_tables();
+  build_disk_tables();
 }
 
 float LEDBlackHole::r_outer_horizon() const {
@@ -157,13 +167,11 @@ float LEDBlackHole::r_ergosphere(float theta) const {
 }
 
 float LEDBlackHole::b_critical_prograde() const {
-  // Prograde equatorial critical impact parameter
+  // Prograde equatorial critical impact parameter.
   const float a_star = std::clamp(spin_.load(), -0.99f, 0.99f);
   // r_ph_prograde = 2 * M * (1 + cos(2/3 * acos(-a_star)))
   const float r_ph = 2.0f * mass_ * (1.0f + std::cos((2.0f / 3.0f) * std::acos(-a_star)));
   const float a_dim = a_star * mass_;
-  // b_crit = (-(r_ph^3) + 3*M*r_ph^2 - a^2*(r_ph + M)) / (a*(r_ph - M))
-  // Equivalently, b_crit = -(r_ph^2 + a^2) / a + (2*M*r_ph) / a when simplified:
   if (std::abs(a_star) < 1e-4f) {
     return 3.0f * std::sqrt(3.0f) * mass_;
   }
@@ -173,9 +181,8 @@ float LEDBlackHole::b_critical_prograde() const {
 }
 
 float LEDBlackHole::b_critical_retrograde() const {
-  // Retrograde equatorial critical impact parameter
+  // Retrograde equatorial critical impact parameter.
   const float a_star = std::clamp(spin_.load(), -0.99f, 0.99f);
-  // r_ph_retro = 2 * M * (1 + cos(2/3 * acos(a_star)))
   const float r_ph = 2.0f * mass_ * (1.0f + std::cos((2.0f / 3.0f) * std::acos(a_star)));
   const float a_dim = a_star * mass_;
   if (std::abs(a_star) < 1e-4f) {
@@ -186,33 +193,213 @@ float LEDBlackHole::b_critical_retrograde() const {
   return std::abs(b_crit);
 }
 
+// Innermost stable circular orbit (Bardeen-Press-Teukolsky). a = 0 -> 6M.
+float LEDBlackHole::r_isco() const {
+  const float a = std::clamp(spin_.load(), -0.99f, 0.99f);
+  const float a2 = a * a;
+  const float z1 =
+      1.0f + std::cbrt(1.0f - a2) * (std::cbrt(1.0f + a) + std::cbrt(1.0f - a));
+  const float z2 = std::sqrt(3.0f * a2 + z1 * z1);
+  const float inner = std::max(0.0f, (3.0f - z1) * (3.0f + z1 + 2.0f * z2));
+  return mass_ * (3.0f + z2 - std::sqrt(inner));
+}
+
+float LEDBlackHole::deflection(float b_impact) const {
+  const float r_plus = r_outer_horizon();
+  return integrate_ray(b_impact, mass_, spin_.load() * mass_, r_plus).bend;
+}
+
+float LEDBlackHole::isco_radius() const { return r_isco(); }
+
+float LEDBlackHole::shadow_radius(float azimuth) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (shadow_r_.empty()) {
+    build_shadow_table();
+  }
+  float psi = std::fmod(azimuth, kTwoPi);
+  if (psi < 0.0f) psi += kTwoPi;
+  const int si = std::clamp(static_cast<int>(psi * (kShadowBins / kTwoPi)), 0, kShadowBins - 1);
+  return shadow_r_[si];
+}
+
+float LEDBlackHole::redshift_factor(float r, float b_impact) const {
+  const float M = mass_;
+  const float a = spin_.load() * mass_;
+  const float sqrt_m = std::sqrt(M);
+  const float omega = sqrt_m / (r * std::sqrt(r) + a * sqrt_m);
+  const float arg = 1.0f - 2.0f * M / r + 4.0f * M * a * omega / r -
+                    omega * omega * (r * r + a * a + 2.0f * M * a * a / r);
+  const float ut = 1.0f / std::sqrt(std::max(arg, 1e-3f));
+  if (!rel_beam_.load()) {
+    return 1.0f / ut;  // no Doppler beaming
+  }
+  float denom = 1.0f - omega * b_impact;
+  if (std::abs(denom) < 1e-3f) denom = (denom < 0.0f) ? -1e-3f : 1e-3f;
+  return 1.0f / (ut * denom);
+}
+
+void LEDBlackHole::set_disk_color(int r, int g, int b) {
+  color_r_.store(std::clamp(r, 0, 255));
+  color_g_.store(std::clamp(g, 0, 255));
+  color_b_.store(std::clamp(b, 0, 255));
+  color_on_.store(true);
+}
+
+void LEDBlackHole::set_orbit(float radians) {
+  float a = std::fmod(radians, kTwoPi);
+  if (a > kPi) a -= kTwoPi;
+  if (a < -kPi) a += kTwoPi;
+  orbit_.store(a);
+}
+
 void LEDBlackHole::set_spin(float spin) {
   std::lock_guard<std::mutex> lock(mutex_);
   spin_.store(std::clamp(spin, -0.99f, 0.99f));
-  build_bend_table();
+  build_bend_tables();
+  build_disk_tables();
+  view_dirty_ = true;
 }
 
-void LEDBlackHole::build_bend_table() {
-  bend_table_prograde_.resize(kBendTableSize);
-  bend_table_retrograde_.resize(kBendTableSize);
+void LEDBlackHole::build_bend_tables() {
+  bend_pro_.resize(kBendTableSize);
+  bend_ret_.resize(kBendTableSize);
+  rmin_pro_.resize(kBendTableSize);
+  rmin_ret_.resize(kBendTableSize);
+  rfar_pro_.resize(kBendTableSize);
+  rfar_ret_.resize(kBendTableSize);
 
   const float r_plus = r_outer_horizon();
   const float a_dim = spin_.load() * mass_;
   const float b_crit_pro = b_critical_prograde();
   const float b_crit_ret = b_critical_retrograde();
-
-  const float span_pro = b_max_ - b_crit_pro;
-  const float span_ret = b_max_ - b_crit_ret;
+  const float span_pro = std::max(b_max_ - b_crit_pro, 1e-3f);
+  const float span_ret = std::max(b_max_ - b_crit_ret, 1e-3f);
 
   for (int i = 0; i < kBendTableSize; ++i) {
     const float t = (i + 0.5f) / kBendTableSize;
-    // Prograde: b > 0
     const float b_pro = b_crit_pro + span_pro * t * t;
-    bend_table_prograde_[i] = integrate_bend_kerr(b_pro, mass_, a_dim, r_plus);
+    const RayTrace rp = integrate_ray(b_pro, mass_, a_dim, r_plus);
+    bend_pro_[i] = rp.captured ? kBigBend : rp.bend;
+    rmin_pro_[i] = rp.captured ? r_plus : rp.r_min;
+    rfar_pro_[i] = rp.captured ? -1.0f : rp.r_far;
 
-    // Retrograde: b < 0
     const float b_ret = b_crit_ret + span_ret * t * t;
-    bend_table_retrograde_[i] = integrate_bend_kerr(-b_ret, mass_, a_dim, r_plus);
+    const RayTrace rr = integrate_ray(-b_ret, mass_, a_dim, r_plus);
+    bend_ret_[i] = rr.captured ? kBigBend : rr.bend;
+    rmin_ret_[i] = rr.captured ? r_plus : rr.r_min;
+    rfar_ret_[i] = rr.captured ? -1.0f : rr.r_far;
+  }
+}
+
+// Kerr shadow boundary in the observer's sky. For a spherical photon orbit at
+// radius r the critical curve is (Bardeen 1973; alpha = -xi/sin i):
+//   xi  = -(r^3 - 3Mr^2 + a^2 r + a^2 M) / (a (r - M))
+//   eta = -r^3 (r^3 - 6Mr^2 + 9M^2 r - 4a^2 M) / (a^2 (r - M)^2)
+//   alpha = -xi / sin i,  beta = +-sqrt(eta + a^2 cos^2 i - xi^2 cot^2 i)
+// swept over r in [r_ph(retro), r_ph(pro)]. The curve is star-shaped about
+// the origin, so a radius-vs-azimuth table is enough for a point test.
+void LEDBlackHole::build_shadow_table() {
+  const float M = mass_;
+  const float a = spin_.load() * mass_;
+  const float a_star = std::clamp(spin_.load(), -0.99f, 0.99f);
+  const float schwarzschild = 3.0f * std::sqrt(3.0f) * M;
+  shadow_r_.assign(kShadowBins, schwarzschild);
+
+  const float tilt = std::clamp(tilt_squash_.load(), 0.05f, 1.0f);
+  const float cos_i = tilt;
+  const float sin_i = std::sqrt(std::max(1.0f - cos_i * cos_i, 0.0025f));
+  const float cot_i = cos_i / sin_i;
+  if (std::abs(a_star) < 0.02f) {
+    return;  // Schwarzschild: circle of radius 3 sqrt(3) M
+  }
+
+  const float r_pro = 2.0f * M * (1.0f + std::cos((2.0f / 3.0f) * std::acos(std::clamp(-a_star, -1.0f, 1.0f))));
+  const float r_ret = 2.0f * M * (1.0f + std::cos((2.0f / 3.0f) * std::acos(std::clamp(a_star, -1.0f, 1.0f))));
+
+  const int kSamples = 1024;
+  std::vector<float> th;
+  std::vector<float> rad;
+  th.reserve(kSamples + 1);
+  rad.reserve(kSamples + 1);
+  for (int i = 0; i <= kSamples; ++i) {
+    const float r = r_ret + (r_pro - r_ret) * static_cast<float>(i) / kSamples;
+    if (std::abs(r - M) < 1e-5f) continue;
+    const float rm = r - M;
+    const float xi = -((r * r * r - 3.0f * M * r * r + a * a * r + a * a * M) / (a * rm));
+    const float eta = -(r * r * r) * (r * r * r - 6.0f * M * r * r + 9.0f * M * M * r - 4.0f * a * a * M) /
+                      (a * a * rm * rm);
+    const float arg = eta + a * a * cos_i * cos_i - xi * xi * cot_i * cot_i;
+    if (arg < 0.0f) continue;  // this spherical orbit is not on the silhouette
+    const float beta = std::sqrt(arg);
+    const float alpha = -xi / sin_i;
+    float theta = std::atan2(beta, alpha);
+    if (theta < 0.0f) theta += kPi;
+    if (!th.empty() && theta < th.back()) theta = th.back() + 1e-5f;  // guard monotonicity
+    th.push_back(theta);
+    rad.push_back(std::sqrt(alpha * alpha + beta * beta));
+  }
+  if (th.size() < 2) return;
+
+  auto radius_at = [&](float t) {
+    if (t <= th.front()) return rad.front();
+    if (t >= th.back()) return rad.back();
+    for (std::size_t j = 1; j < th.size(); ++j) {
+      if (t <= th[j]) {
+        const float f = (t - th[j - 1]) / std::max(th[j] - th[j - 1], 1e-6f);
+        return rad[j - 1] + f * (rad[j] - rad[j - 1]);
+      }
+    }
+    return rad.back();
+  };
+
+  for (int k = 0; k < kShadowBins; ++k) {
+    const float psi = kTwoPi * (k + 0.5f) / kShadowBins;
+    const float t = (psi <= kPi) ? psi : (kTwoPi - psi);  // beta -> -beta symmetry
+    shadow_r_[k] = radius_at(t);
+  }
+}
+
+void LEDBlackHole::build_disk_tables() {
+  omega_lut_.resize(kDiskRadiusBins);
+  ut_lut_.resize(kDiskRadiusBins);
+  temp_lut_.resize(kDiskRadiusBins);
+  emis_lut_.resize(kDiskRadiusBins);
+
+  const float M = mass_;
+  const float a = spin_.load() * mass_;
+  const float sqrt_m = std::sqrt(M);
+  const float r_in = r_isco();
+  const float r_out = std::max(r_outer_, r_in + 1e-3f);
+
+  for (int j = 0; j < kDiskRadiusBins; ++j) {
+    const float r = r_in + (r_out - r_in) * (j + 0.5f) / kDiskRadiusBins;
+    // Exact Kerr equatorial Keplerian frequency.
+    const float omega = sqrt_m / (r * std::sqrt(r) + a * sqrt_m);
+    // u^t for the circular orbit: 1/sqrt(-(g_tt + 2 Omega g_tphi + Omega^2 g_phiphi)).
+    const float arg = 1.0f - 2.0f * M / r + 4.0f * M * a * omega / r -
+                      omega * omega * (r * r + a * a + 2.0f * M * a * a / r);
+    omega_lut_[j] = omega;
+    ut_lut_[j] = 1.0f / std::sqrt(std::max(arg, 1e-3f));
+    // Shakura-Sunyaev: T ~ r^(-3/4), peak at the ISCO.
+    const float ratio = r_in / r;
+    // Bright, warm display profile so the outer disk stays above the
+    // terminal's visibility floor instead of fading to black.
+    // Fiery natural palette mapped across the disk: blue-white core -> yellow
+    // -> orange -> deep red rim.
+    const float u = std::clamp((r - r_in) / std::max(r_out - r_in, 1e-3f), 0.0f, 1.0f);
+    temp_lut_[j] = kInnerKelvin + (kOuterKelvin - kInnerKelvin) *
+                                      std::exp(0.7f * std::log(u + 0.03f));
+    emis_lut_[j] = 0.40f + 0.60f * ratio;
+  }
+
+  color_lut_.resize(kColorLutSize);
+  color_tmin_ = temp_lut_[kDiskRadiusBins - 1];
+  color_tmax_ = temp_lut_[0];
+  for (int i = 0; i < kColorLutSize; ++i) {
+    const float temp = color_tmin_ + (color_tmax_ - color_tmin_) * (i + 0.5f) / kColorLutSize;
+    std::uint8_t r = 0, g = 0, b = 0;
+    kelvin_to_rgb(temp, r, g, b);
+    color_lut_[i] = {r, g, b};
   }
 }
 
@@ -220,57 +407,48 @@ void LEDBlackHole::set_disk_radius(float radius) {
   std::lock_guard<std::mutex> lock(mutex_);
   r_outer_ = std::clamp(radius, r_outer_horizon() * 1.5f, side_ * 1.5f);
   b_max_ = r_outer_ * 1.5f;
-  build_bend_table();
-  
-  // Respawn particles so they cover the new disk area
-  for (Particle& p : particles_) {
-    respawn(p);
+  build_bend_tables();
+  build_disk_tables();
+  view_dirty_ = true;
+}
+
+void LEDBlackHole::rebuild_geometry() {
+  const int sub_side = side_ * 2;
+  const float center = side_;
+  const float tilt = std::clamp(tilt_squash_.load(), 0.05f, 1.0f);
+  const float zoom = std::clamp(zoom_scale_.load(), 0.5f, 2.0f);
+  const float inv_2_zoom = 1.0f / (2.0f * zoom);
+  const float inv_tilt = 1.0f / tilt;
+  const float orbit = orbit_.load();
+  const float cos_o = std::cos(orbit);
+  const float sin_o = std::sin(orbit);
+
+  geom_.assign(static_cast<std::size_t>(sub_side) * sub_side, ScreenPixel{});
+  const float b_max_sq_margin = b_max_ * b_max_ * 1.05f;
+
+  for (int sy = 0; sy < sub_side; ++sy) {
+    const float ny0 = (sy - center) * inv_2_zoom;
+    for (int sx = 0; sx < sub_side; ++sx) {
+      const float nx0 = (sx - center) * inv_2_zoom;
+      // Camera roll: rotate the screen plane so a horizontal drag spins the view.
+      const float nx = cos_o * nx0 - sin_o * ny0;
+      const float ny = sin_o * nx0 + cos_o * ny0;
+      const float y_front = ny * inv_tilt;
+      const float b2 = nx * nx + ny * ny;
+      ScreenPixel& p = geom_[static_cast<std::size_t>(sy) * sub_side + sx];
+      if (b2 > b_max_sq_margin) continue;
+      p.nx = nx;
+      p.b = std::sqrt(b2);
+      p.phi = std::atan2(ny, nx);
+      p.r_front = std::sqrt(nx * nx + y_front * y_front);
+      p.theta = std::atan2(y_front, nx);
+      p.ny = ny;
+    }
   }
-}
-
-void LEDBlackHole::respawn(Particle& p) {
-  const float r_plus = r_outer_horizon();
-  std::uniform_real_distribution<float> angle_dist(0.0f, kTwoPi);
-  std::uniform_real_distribution<float> radius_dist(std::max(r_plus, r_outer_ * 0.85f), r_outer_);
-  std::uniform_real_distribution<float> sparkle_dist(0.7f, 1.0f);
-  p.angle = angle_dist(rng_);
-  p.radius = radius_dist(rng_);
-  p.sparkle = sparkle_dist(rng_);
-}
-
-void LEDBlackHole::respawn(ErgosphereParticle& ep) {
-  const float r_plus = r_outer_horizon();
-  const float r_ergo = r_ergosphere(kPi * 0.5f);  // Equatorial ergosphere radius = 2*M
-  const float r_min = r_plus * 1.01f;
-  const float r_max = std::max(r_min + 0.01f * mass_, r_ergo * 1.05f);
-
-  std::uniform_real_distribution<float> angle_dist(0.0f, kTwoPi);
-  std::uniform_real_distribution<float> radius_dist(r_min, r_max);
-  std::uniform_real_distribution<float> sparkle_dist(0.6f, 1.0f);
-
-  ep.angle = angle_dist(rng_);
-  ep.radius = radius_dist(rng_);
-  // Frame-dragging angular velocity: omega = 2*M*a / (r^3 + a^2*r + 2*M*a^2)
-  const float a_dim = spin_.load() * mass_;
-  const float r = ep.radius;
-  const float denom = r * r * r + a_dim * a_dim * r + 2.0f * mass_ * a_dim * a_dim;
-  const float omega_drag = (denom > 1e-4f) ? (2.0f * mass_ * a_dim / denom) : 0.0f;
-  // Combine frame-dragging with small thermal perturbation:
-  std::uniform_real_distribution<float> vel_jitter(0.9f, 1.1f);
-  ep.angular_velocity = omega_drag * vel_jitter(rng_) * 0.8f + 0.10f;
-  ep.sparkle = sparkle_dist(rng_);
-}
-
-int LEDBlackHole::density_index(float radius, float angle) const {
-  const float r_plus = r_outer_horizon();
-  const float r_frac = (radius - r_plus) / std::max(r_outer_ - r_plus, 1e-3f);
-  const int radius_bin = std::clamp(static_cast<int>(r_frac * kRadiusBins), 0, kRadiusBins - 1);
-
-  float a = std::fmod(angle, kTwoPi);
-  if (a < 0.0f) a += kTwoPi;
-  const int angle_bin = std::clamp(static_cast<int>(a / kTwoPi * kAngleBins), 0, kAngleBins - 1);
-
-  return radius_bin * kAngleBins + angle_bin;
+  geom_sub_side_ = sub_side;
+  geom_zoom_ = zoom;
+  geom_tilt_ = tilt;
+  geom_orbit_ = orbit;
 }
 
 void LEDBlackHole::advance(ftxui::animation::Duration elapsed) {
@@ -286,204 +464,166 @@ void LEDBlackHole::tick() {
   phase_ += 0.06f;
   if (phase_ > kTwoPi * 100.0f) phase_ -= kTwoPi * 100.0f;
 
-  const float r_plus = r_outer_horizon();
-  const float a_dim = spin_.load() * mass_;
-
-  std::uniform_real_distribution<float> jitter(-kRadiusJitter, kRadiusJitter);
-  for (Particle& p : particles_) {
-    // Relativistic Keplerian frequency in Kerr metric: Omega = 1 / (r^(3/2)/sqrt(M) + a)
-    const float r = std::max(p.radius, r_plus);
-    const float omega_kerr = 1.0f / (std::pow(r, 1.5f) / std::sqrt(mass_) + a_dim + 1e-3f);
-    p.angle += omega_kerr * 0.4f + kOrbitalConstant / r;
-    p.radius += jitter(rng_) - kInwardDrift;
-    if (p.radius <= r_plus) respawn(p);
-    p.radius = std::min(p.radius, r_outer_);
-  }
-
-  const float r_ergo = r_ergosphere(kPi * 0.5f);
-  std::uniform_real_distribution<float> ergo_jitter(-0.01f, 0.01f);
-  for (ErgosphereParticle& ep : ergo_particles_) {
-    const float r = ep.radius;
-    const float denom = r * r * r + a_dim * a_dim * r + 2.0f * mass_ * a_dim * a_dim;
-    const float omega_drag = (denom > 1e-4f) ? (2.0f * mass_ * a_dim / denom) : 0.0f;
-    ep.angular_velocity = omega_drag * 0.8f + 0.10f;
-    ep.angle += ep.angular_velocity;
-    ep.radius += ergo_jitter(rng_);
-    ep.radius = std::clamp(ep.radius, r_plus * 1.01f, std::max(r_plus * 1.02f, r_ergo * 1.05f));
-  }
-
-  std::fill(occupied_.begin(), occupied_.end(), false);
-  for (const Particle& p : particles_) {
-    const float intensity = std::clamp(1.0f - (p.radius - r_plus) / std::max(r_outer_ - r_plus, 1e-3f), 0.0f, 1.0f) * p.sparkle;
-    if (intensity < 0.03f) continue;
-
-    const int idx = density_index(p.radius, p.angle);
-    density_[idx] = ftxui::Color::White;
-    occupied_[idx] = true;
-  }
+  pulse_phase_ += kTickSeconds * pulse_rate_.load() * kTwoPi;
+  if (pulse_phase_ > kTwoPi * 1000.0f) pulse_phase_ -= kTwoPi * 1000.0f;
 }
 
 void LEDBlackHole::render(TFrameBuffer& matrix) {
   std::lock_guard<std::mutex> lock(mutex_);
   const int sub_side = side_ * 2;
-  const float center = side_;
-
   const float tilt = std::clamp(tilt_squash_.load(), 0.05f, 1.0f);
   const float zoom = std::clamp(zoom_scale_.load(), 0.5f, 2.0f);
-  const float rear_scale = std::clamp(rear_scale_.load(), 0.40f, 1.50f);
+  const float orbit = orbit_.load();
+  if (geom_.size() != static_cast<std::size_t>(sub_side) * sub_side || geom_zoom_ != zoom ||
+      geom_tilt_ != tilt || geom_orbit_ != orbit || view_dirty_) {
+    rebuild_geometry();
+    build_shadow_table();
+    view_dirty_ = false;
+  }
 
-  const float inv_2_zoom = 1.0f / (2.0f * zoom);
-  const float inv_tilt = 1.0f / tilt;
-  const float r_plus = r_outer_horizon();
-  const float r_outer_rear = r_outer_ * rear_scale;
-  const float inv_r_span = 1.0f / std::max(r_outer_ - r_plus, 1e-3f);
-  const float inv_r_span_rear = 1.0f / std::max(r_outer_rear - r_plus, 1e-3f);
-  const float inv_fold_scale = 1.0f / (0.5f * r_plus);
-
+  const float r_in = r_isco();
   const float b_crit_pro = b_critical_prograde();
   const float b_crit_ret = b_critical_retrograde();
-  const float inv_b_span_pro = 1.0f / std::max(b_max_ - b_crit_pro, 1e-3f);
-  const float inv_b_span_ret = 1.0f / std::max(b_max_ - b_crit_ret, 1e-3f);
+  const float span_pro = std::max(b_max_ - b_crit_pro, 1e-3f);
+  const float span_ret = std::max(b_max_ - b_crit_ret, 1e-3f);
+  const float inv_dr = 1.0f / std::max(r_outer_ - r_in, 1e-3f);
+  const float inv_bins = static_cast<float>(kDiskRadiusBins);
+  const float color_span = std::max(color_tmax_ - color_tmin_, 1e-3f);
+  const bool rel_beam = rel_beam_.load();
+  const float lens = std::clamp(lensing_strength_.load(), 0.0f, 1.0f);
 
-  int sx = 0;
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
-  const float32x4_t v_center = vdupq_n_f32(center);
-  const float32x4_t v_inv_2_zoom = vdupq_n_f32(inv_2_zoom);
+  // Linear interpolation of the far-side transfer table (smoother than the
+  // nearest-entry lookup the index alone would give).
+  auto sample_rfar = [&](bool pro, float b) {
+    const float bc = pro ? b_crit_pro : b_crit_ret;
+    const float sp = pro ? span_pro : span_ret;
+    const float br = std::clamp((b - bc) / sp, 0.0f, 1.0f);
+    const float f = std::sqrt(br) * (kBendTableSize - 1);
+    const int i0 = std::clamp(static_cast<int>(f), 0, kBendTableSize - 1);
+    const int i1 = std::min(i0 + 1, kBendTableSize - 1);
+    const float fr = f - static_cast<float>(i0);
+    const float* tbl = pro ? rfar_pro_.data() : rfar_ret_.data();
+    return tbl[i0] + fr * (tbl[i1] - tbl[i0]);
+  };
+  // Soft rim: fade over a couple of logical pixels instead of a hard cut.
+  const float edge_w = std::max(0.10f * (r_outer_ - r_in), 1.0f);
+  auto edge_at = [&](float r) {
+    return std::min(std::clamp((r - r_in) / edge_w, 0.0f, 1.0f),
+                    std::clamp((r_outer_ - r) / edge_w, 0.0f, 1.0f));
+  };
 
-  for (; sx <= sub_side - 4; sx += 4) {
-    const float32x4_t v_sx = {static_cast<float>(sx), static_cast<float>(sx + 1),
-                              static_cast<float>(sx + 2), static_cast<float>(sx + 3)};
-    const float32x4_t v_nx = vmulq_f32(vsubq_f32(v_sx, v_center), v_inv_2_zoom);
-    const float32x4_t v_nx2 = vmulq_f32(v_nx, v_nx);
+  auto emit = [&](int x, int y, float r, float b_signed, float boost, float theta, bool stipple) {
+    const int j = std::clamp(static_cast<int>((r - r_in) * inv_dr * inv_bins), 0, kDiskRadiusBins - 1);
+    const float ut = ut_lut_[j];
+    float g = 0.0f;
+    if (rel_beam) {
+      float denom = 1.0f - omega_lut_[j] * b_signed;
+      if (std::abs(denom) < 1e-3f) denom = (denom < 0.0f) ? -1e-3f : 1e-3f;
+      g = 1.0f / (ut * denom);  // relativistic redshift + Doppler beaming
+    } else {
+      g = 1.0f / ut;  // gravitational/transverse redshift only
+    }
+    g = std::clamp(g, 0.05f, 20.0f);
 
-    vst1q_f32(&nx_table_[sx], v_nx);
-    vst1q_f32(&nx2_table_[sx], v_nx2);
-  }
-#endif
-  for (; sx < sub_side; ++sx) {
-    const float nx = (sx - center) * inv_2_zoom;
-    nx_table_[sx] = nx;
-    nx2_table_[sx] = nx * nx;
-  }
+    // Pulsating accretion: spiral hot spots advected with the flow, riding a
+    // slow global "ignition" beat. pulse ~ [0.2, 1.3].
+    float pulse = 1.0f;
+    if (pulsing_) {
+      const float lump = 0.5f + 0.5f * std::sin(pulse_phase_ - 4.0f * theta + (r - r_in) * 1.6f);
+      const float beat = 0.75f + 0.25f * std::sin(pulse_phase_ * 0.7f);
+      pulse = (0.45f + 0.85f * lump) * beat;
+    }
 
-  const float b_max_sq_margin = b_max_ * b_max_ * 1.05f;
-
-  for (int sy = 0; sy < sub_side; ++sy) {
-    const float ny = (sy - center) * inv_2_zoom;
-    const float ny2 = ny * ny;
-    const float y_front = ny * inv_tilt;
-    const float y_front2 = y_front * y_front;
-
-    for (int sx = 0; sx < sub_side; ++sx) {
-      const float nx = nx_table_[sx];
-      const float nx2 = nx2_table_[sx];
-      const float b2 = nx2 + ny2;
-
-      if (b2 > b_max_sq_margin) continue;
-
-      const float b = std::sqrt(b2);
-
-      const float r_front = std::sqrt(nx2 + y_front2);
-      const bool is_front_disk = (r_front >= r_plus && r_front <= r_outer_) && (ny >= -0.1f * r_plus);
-
-      if (is_front_disk) {
-        const float theta = std::atan2(y_front, nx);
-
-        const float a_dim = spin_.load() * mass_;
-        const float omega_front = 1.0f / (std::pow(r_front, 1.5f) / std::sqrt(mass_) + a_dim + 1e-3f);
-        const float theta_swirl_front = theta - phase_ * omega_front * 1.5f;
-        const int idx = density_index(r_front, theta_swirl_front);
-
-        const float u_front = (r_front - r_plus) * inv_r_span;
-        const float radial_norm = 1.0f - u_front;
-        const float swirl_wave = 0.5f + 0.5f * std::cos(4.0f * theta_swirl_front + 6.0f * (r_front / r_outer_));
-        const float active_norm = radial_norm * (0.65f + 0.35f * swirl_wave);
-
-        if (occupied_[idx] || active_norm > 0.30f) {
-          const float doppler = 1.0f - 0.45f * (nx / (r_front + 1e-4f));
-          const float dynamic_doppler = doppler * (0.9f + 0.2f * std::sin(theta_swirl_front * 2.0f));
-          const float effective_u = std::clamp(u_front + 0.15f * std::sin(theta_swirl_front * 3.0f + 2.0f * u_front), 0.0f, 1.0f);
-          ftxui::Color point_color = color_for_disk(effective_u, dynamic_doppler);
-
-          matrix.draw_point(sx, sy, point_color);
-          continue;
+    const float temp = temp_lut_[j] * g * (pulsing_ ? (0.90f + 0.20f * pulse) : 1.0f);
+    const int ci = std::clamp(
+        static_cast<int>((temp - color_tmin_) / color_span * (kColorLutSize - 1)), 0, kColorLutSize - 1);
+    const float g2 = g * g;
+    const float intensity = emis_lut_[j] * g2 * g2 * boost * pulse;  // beaming g^4 * flux * pulse
+    const float s = std::sqrt(std::sqrt(std::clamp(intensity, 0.0f, 1.0f)));
+    // Mix of the smooth ("smeared") sheet and advected particles: the sheet is
+    // drawn at (1 - mix) and the hash adds bright particles on top, so both are
+    // visible together. mix = 0 -> pure smear, 1 -> pure particles.
+    float sparkle = 1.0f;
+    if (stipple) {
+      const float mix = disk_mix_.load();
+      if (mix > 0.0f) {
+        sparkle = 1.0f - 0.45f * mix;  // keep the fiery sheet visible
+        const float aphi = theta + phase_ * (0.5f + 18.0f * omega_lut_[j]);
+        const int gi = static_cast<int>(std::floor(r * 2.5f));
+        const int gj = static_cast<int>(std::floor(aphi * 6.0f));
+        std::uint32_t hsh = static_cast<std::uint32_t>(gi) * 73856093u ^
+                            static_cast<std::uint32_t>(gj) * 19349663u;
+        hsh ^= hsh >> 13;
+        hsh *= 0x85ebca6bu;
+        hsh ^= hsh >> 16;
+        if ((hsh & 3u) == 0u) {  // ~25% of cells carry a particle
+          sparkle += mix * 1.8f * (0.55f + static_cast<float>(hsh % 100u) * 0.009f);
         }
       }
+    }
+    const std::array<std::uint8_t, 3>& c = color_lut_[ci];
+    // Clamp before the cast: an out-of-range float -> uint8_t conversion is UB
+    // (that is what produced stray green/cyan sparkles).
+    const auto to8 = [](float v) { return static_cast<std::uint8_t>(std::clamp(v, 0.0f, 255.0f)); };
+    std::uint8_t rr = to8(c[0] * s * sparkle);
+    std::uint8_t gg = to8(c[1] * s * sparkle);
+    std::uint8_t bb = to8(c[2] * s * sparkle);
+    if (color_on_.load()) {
+      const float sb = std::min(s * sparkle * 1.5f, 1.0f);
+      rr = to8(static_cast<float>(color_r_.load()) * sb);
+      gg = to8(static_cast<float>(color_g_.load()) * sb);
+      bb = to8(static_cast<float>(color_b_.load()) * sb);
+    }
+    matrix.draw_point(x, y, ftxui::Color::RGB(rr, gg, bb));
+  };
 
-      // In Kerr spacetime, the shadow boundary and photon capture parameters vary continuously
-      // with azimuth angle around the black hole. nx > 0 is prograde, nx < 0 is retrograde,
-      // and vertical rays (nx = 0) smoothly transition between them.
-      const float phi_screen = std::atan2(ny, nx);
-      const float cos_phi = std::cos(phi_screen); // +1 on prograde side, -1 on retrograde side
-      const float t_dir = std::clamp(0.5f * (1.0f + cos_phi), 0.0f, 1.0f); // 1 for prograde, 0 for retrograde
+  for (int sy = 0; sy < sub_side; ++sy) {
+    for (int sx = 0; sx < sub_side; ++sx) {
+      const ScreenPixel& p = geom_[static_cast<std::size_t>(sy) * sub_side + sx];
+      if (p.b < 0.0f) continue;
 
-      // Continuous critical impact parameter around the perimeter
-      const float b_critical = t_dir * b_crit_pro + (1.0f - t_dir) * b_crit_ret;
+      float psi = p.phi;
+      if (psi < 0.0f) psi += kTwoPi;
+      const int si = std::clamp(static_cast<int>(psi * (kShadowBins / kTwoPi)), 0, kShadowBins - 1);
+      const float shadow = shadow_r_[si];
+      const bool prograde = p.nx < 0.0f;  // xi > 0 side of the critical curve
+      const float b_signed = prograde ? p.b : -p.b;
 
-      if (b <= b_critical) continue;
-
-      if (b > b_critical && b <= b_critical * 1.05f) {
-        matrix.draw_point(sx, sy, ftxui::Color(ftxui::Color::White));
+      // Photon ring: a thin band just OUTSIDE the shadow (never fill the
+      // shadow interior -- it must stay black).
+      if (p.b > shadow && p.b <= shadow * 1.04f) {
+        emit(sx, sy, r_in, b_signed, 2.4f, p.theta, false);
         continue;
       }
 
-      // Smoothly interpolate relative span and bend between prograde and retrograde
-      const float inv_b_span = t_dir * inv_b_span_pro + (1.0f - t_dir) * inv_b_span_ret;
-      const float b_rel = (b - b_critical) * inv_b_span;
-      const int table_idx = std::clamp(static_cast<int>(std::sqrt(std::max(0.0f, b_rel)) * kBendTableSize), 0, kBendTableSize - 1);
-      const float bend_pro = bend_table_prograde_[table_idx];
-      const float bend_ret = bend_table_retrograde_[table_idx];
-      const float bend = t_dir * bend_pro + (1.0f - t_dir) * bend_ret;
-      if (bend < 0.0f) continue;
+      // Near side of the disk passes IN FRONT of the hole, so it is drawn even
+      // across the shadow: this is the horizontal band.
+      if (p.ny >= 0.0f && p.r_front >= r_in && p.r_front <= r_outer_) {
+        emit(sx, sy, p.r_front, b_signed, 1.15f * edge_at(p.r_front), p.theta, true);
+        continue;
+      }
 
-      const float sin_phi = std::abs(std::sin(phi_screen));
+      // Everything else is behind the hole and occluded by the shadow.
+      if (p.b <= shadow) continue;
 
-      const float compression = 1.0f + lensing_strength_.load() * bend * (0.4f + 0.6f * sin_phi);
-      const float exp_comp = 1.0f / std::max(compression, 0.1f);
-      const float r_lensed = r_plus + (r_outer_rear - r_plus) * (b_rel <= 0.0f ? 0.0f : std::exp(exp_comp * std::log(b_rel)));
-
-      if (r_lensed >= r_plus && r_lensed <= r_outer_rear) {
-        const float x_tanh = ny * inv_fold_scale;
-        const float x2_tanh = x_tanh * x_tanh;
-        const float transition = std::clamp(x_tanh * (27.0f + x2_tanh) / (27.0f + 9.0f * x2_tanh), -1.0f, 1.0f);
-        const float theta_disk = phi_screen - transition * bend;
-
-        const float a_dim = spin_.load() * mass_;
-        const float omega_lensed = 1.0f / (std::pow(r_lensed, 1.5f) / std::sqrt(mass_) + a_dim + 1e-3f);
-        const float theta_swirl_lensed = theta_disk - phase_ * omega_lensed * 1.5f;
-        const int idx = density_index(r_lensed, theta_swirl_lensed);
-
-        const float u_lensed = (r_lensed - r_plus) * inv_r_span_rear;
-        const float radial_norm = 1.0f - u_lensed;
-        const float swirl_wave = 0.5f + 0.5f * std::cos(4.0f * theta_swirl_lensed + 6.0f * (r_lensed / r_outer_));
-        const float active_norm = radial_norm * (0.65f + 0.35f * swirl_wave);
-
-        const float lensing_boost = 0.8f + 0.4f * sin_phi;
-        const float effective_active = active_norm * lensing_boost;
-
-        if (occupied_[idx] || effective_active > 0.30f) {
-          const float doppler = 1.0f - 0.40f * (nx / (b + 1e-4f));
-          const float dynamic_doppler = doppler * (0.9f + 0.2f * std::sin(theta_swirl_lensed * 2.0f));
-          const float effective_u = std::clamp(u_lensed + 0.15f * std::sin(theta_swirl_lensed * 3.0f + 2.0f * u_lensed), 0.0f, 1.0f);
-          ftxui::Color point_color = color_for_disk(effective_u, dynamic_doppler);
-
-          matrix.draw_point(sx, sy, point_color);
+      // Far side, lensed over the top. Its emission radius is the geodesic
+      // transfer r(|phi| = pi): the radius where the bent ray crosses the disk
+      // plane on the far side. This is what produces the arc/swoop.
+      if (p.ny < 0.0f) {
+        // Blend the prograde/retrograde branches across the screen axis so the
+        // arc has no seam, and fade its rim instead of cutting it.
+        const float blend = std::clamp(0.5f - p.nx * 0.5f, 0.0f, 1.0f);
+        const float r_lensed =
+            blend * sample_rfar(true, p.b) + (1.0f - blend) * sample_rfar(false, p.b);
+        // lensing strength: blend the tucked-in flat image with the geodesic arch
+        const float r_far = lens * r_lensed + (1.0f - lens) * p.r_front;
+        if (r_far >= r_in && r_far <= r_outer_) {
+          emit(sx, sy, r_far, b_signed, 1.35f * edge_at(r_far), p.theta + kPi, true);
         }
       }
     }
   }
 
-  for (const ErgosphereParticle& ep : ergo_particles_) {
-    const float e_x = center + ep.radius * std::cos(ep.angle) * 2.0f * zoom;
-    const float e_y = center + ep.radius * std::sin(ep.angle) * 2.0f * zoom;
-
-    const int sx = static_cast<int>(std::round(e_x));
-    const int sy = static_cast<int>(std::round(e_y));
-
-    if (sx >= 0 && sx < sub_side && sy >= 0 && sy < sub_side) {
-      matrix.draw_point(sx, sy, color_for_ergosphere_particle(ep.sparkle));
-    }
-  }
 }
 
 }  // namespace ftxui::ext
