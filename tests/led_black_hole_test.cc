@@ -234,6 +234,85 @@ ftxui::Screen render_black_hole(float spin, float tilt) {
   return screen;
 }
 
+/*
+ * Branch continuity.
+ *
+ * The screen classifies pixels as ring / near / occluded / far with hard
+ * inequalities, and each branch emits at a different radius with a different
+ * boost. Without a taper, adjacent pixels either side of a boundary emit
+ * wildly different values and the disk shows a straight cut plus a seam down
+ * the screen axis. This pins the smoothness so it cannot regress.
+ *
+ * The measure is the largest luminance step between neighbouring pixels. A
+ * night sky is mostly flat, so a bounded maximum is a meaningful claim.
+ */
+void test_no_hard_edges_in_render() {
+  TEST_CASE("Render has no hard pixel edges (branch continuity)");
+
+  ftxui::ext::LEDBlackHole bh(96);
+  bh.set_spin(0.85f);
+  bh.set_tilt(0.16f);   // shallow inclination: where the seam showed worst
+  bh.set_zoom(0.82f);
+  bh.set_particles(false);
+  bh.advance(std::chrono::milliseconds(300));
+  bh.set_disk_mix(0.5f);  // particles on: what the browser showed
+
+  ftxui::ext::TFrameBuffer fb(96, ftxui::Color::Black,
+                              ftxui::ext::TFrameBuffer::DrawMode::Block);
+  bh.render(fb);
+
+  ftxui::Screen screen =
+      ftxui::Screen::Create(ftxui::Dimension::Fixed(192), ftxui::Dimension::Fixed(192));
+  ftxui::Render(screen, fb.render());
+
+  /*
+   * A hard branch boundary is a *straight* line, so the test is for a line that
+   * stands out from its neighbours -- not for a row that happens to be busy.
+   *
+   * Across a textured disk, many rows change colour in most of their columns;
+   * that is shading, not a seam. A seam is a local spike: one row (or column)
+   * far above the rows beside it.
+   *
+   * Colour channels are not publicly readable, but equality is, which is enough.
+   */
+  std::vector<int> col_changes(screen.dimx(), 0);
+  std::vector<int> row_changes(screen.dimy(), 0);
+  for (int y = 0; y < screen.dimy(); ++y) {
+    for (int x = 0; x + 1 < screen.dimx(); ++x) {
+      if (screen.PixelAt(x, y).foreground_color !=
+          screen.PixelAt(x + 1, y).foreground_color) {
+        col_changes[x]++;
+      }
+    }
+  }
+  for (int x = 0; x < screen.dimx(); ++x) {
+    for (int y = 0; y + 1 < screen.dimy(); ++y) {
+      if (screen.PixelAt(x, y).foreground_color !=
+          screen.PixelAt(x, y + 1).foreground_color) {
+        row_changes[y]++;
+      }
+    }
+  }
+
+  // Local spike: how far the busiest line exceeds its immediate neighbours.
+  auto spike = [](const std::vector<int>& v) {
+    int worst = 0;
+    for (std::size_t i = 1; i + 1 < v.size(); ++i) {
+      const int side = std::max(v[i - 1], v[i + 1]);
+      worst = std::max(worst, v[i] - side);
+    }
+    return worst;
+  };
+  const int col_spike = spike(col_changes);
+  const int row_spike = spike(row_changes);
+  std::cout << "  local line spike: column " << col_spike << ", row " << row_spike
+            << " (a straight seam is a large positive spike)" << std::endl;
+
+  // A seam stands hundreds of cells above its neighbours. Shading does not.
+  TEST_ASSERT(col_spike < 40);
+  TEST_ASSERT(row_spike < 40);
+}
+
 void test_render_responds_to_spin() {
   TEST_CASE("Rendered image depends on spin (disk/shadow really drawn)");
 
@@ -273,6 +352,58 @@ void test_relativistic_beaming_toggle() {
             << " (off)" << std::endl;
 }
 
+void test_tracer_matches_bardeen() {
+  TEST_CASE("3D Kerr-Schild tracer captures at the Bardeen critical parameters");
+
+  // side = 100 -> M = 4. The renderer's per-pixel tracer, run on equatorial
+  // rays, must fall in exactly where the closed-form critical curve says --
+  // on both sides, which also pins the spin direction.
+  ftxui::ext::LEDBlackHole bh(100);
+  bh.set_spin(0.90f);
+  auto edge = [&](float sign) {
+    float lo = 2.0f;
+    float hi = 48.0f;
+    for (int i = 0; i < 22; ++i) {
+      const float mid = 0.5f * (lo + hi);
+      if (bh.ray_captured(sign * mid)) lo = mid; else hi = mid;
+    }
+    return 0.5f * (lo + hi);
+  };
+  const float pro = edge(1.0f);
+  const float ret = edge(-1.0f);
+  const float b_pro = bh.b_critical_prograde();
+  const float b_ret = bh.b_critical_retrograde();
+  std::cout << "  traced edge: prograde " << pro << " vs " << b_pro << ", retrograde " << ret
+            << " vs " << b_ret << std::endl;
+  TEST_ASSERT(std::abs(pro - b_pro) / b_pro < 0.02f);
+  TEST_ASSERT(std::abs(ret - b_ret) / b_ret < 0.02f);
+}
+
+void test_face_on_shadow_and_ring() {
+  TEST_CASE("Face-on render: black shadow at the centre, lit disk around it");
+
+  ftxui::ext::LEDBlackHole bh(44);
+  bh.set_tilt(1.0f);
+  bh.advance(std::chrono::milliseconds(300));
+  ftxui::ext::TFrameBuffer fb(44, ftxui::Color::White,
+                              ftxui::ext::TFrameBuffer::DrawMode::Block);
+  bh.render(fb);
+  ftxui::Screen screen =
+      ftxui::Screen::Create(ftxui::Dimension::Fixed(88), ftxui::Dimension::Fixed(88));
+  ftxui::Render(screen, fb.render());
+
+  // Block mode maps one logical pixel to one cell; the frame is 88 wide.
+  const ftxui::Color none;
+  TEST_ASSERT(screen.PixelAt(44, 44).foreground_color == none);
+  int lit = 0;
+  for (int dx = 12; dx <= 26; ++dx) {
+    if (screen.PixelAt(44 + dx, 44).foreground_color != none) ++lit;
+    if (screen.PixelAt(44 - dx, 44).foreground_color != none) ++lit;
+  }
+  std::cout << "  lit cells across the disk annulus: " << lit << " / 30" << std::endl;
+  TEST_ASSERT(lit > 20);
+}
+
 int main() {
   std::cout << "========================================" << std::endl;
   std::cout << "Running Kerr Black Hole physics tests..." << std::endl;
@@ -289,6 +420,9 @@ int main() {
   test_relativistic_beaming_toggle();
   test_render_and_advance();
   test_render_responds_to_spin();
+  test_no_hard_edges_in_render();
+  test_tracer_matches_bardeen();
+  test_face_on_shadow_and_ring();
 
   std::cout << "\nResults: " << g_passed << " passed, " << g_failed << " failed." << std::endl;
   return g_failed == 0 ? 0 : 1;

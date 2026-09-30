@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <random>
@@ -14,6 +15,23 @@
 namespace ftxui::ext {
 
 class TFrameBuffer;
+
+namespace detail {
+
+// One camera ray's Kerr geodesic, traced once per view and shaded every tick.
+// The path depends only on the camera and the spin; time only moves the gas
+// along it.
+struct BlackHoleRay {
+  static constexpr int kMaxHits = 4;
+  std::array<float, kMaxHits> hit_r{};    // disk-plane crossings, in M
+  std::array<float, kMaxHits> hit_phi{};  // azimuth of each crossing
+  int hits = 0;
+  bool escaped = false;
+  float lz = 0.0f;                        // photon axial angular momentum
+  std::array<float, 3> sky{};             // escape direction, for the stars
+};
+
+}  // namespace detail
 
 enum class DrawMode {
   Braille,
@@ -42,7 +60,8 @@ class LEDBlackHole {
   void set_rear_scale(float scale) { rear_scale_.store(std::clamp(scale, 0.40f, 1.50f)); }
   float rear_scale() const { return rear_scale_.load(); }
 
-  // 0 = flat geometric disk (no far-side arch), 1 = full geodesic lensing.
+  // Scales the metric's deviation from flat space: 0 = straight rays (a flat
+  // disk behind an opaque sphere), 1 = full Kerr lensing. Continuous between.
   void set_lensing(float strength) { lensing_strength_.store(std::clamp(strength, 0.0f, 1.0f)); }
   float lensing() const { return lensing_strength_.load(); }
 
@@ -63,13 +82,14 @@ class LEDBlackHole {
   void clear_disk_color() { color_on_.store(false); }
   bool disk_color_active() const { return color_on_.load(); }
 
-  // Blend of smooth ("smeared") sheet (0.0) and advected particles (1.0).
+  // Blend of smooth ("smeared") sheet (0.0) and orbiting particles (1.0).
   void set_disk_mix(float m) { disk_mix_.store(std::clamp(m, 0.0f, 1.0f)); }
   float disk_mix() const { return disk_mix_.load(); }
   void set_particles(bool on) { set_disk_mix(on ? 0.5f : 0.0f); }
   bool particles() const { return disk_mix() > 0.05f; }
 
-  // Pulsating accretion flow: traveling hot spots plus a global ignition beat.
+  // Pulsating accretion flow: a slow global ignition beat. The rate also scales
+  // how fast the gas and particles orbit.
   void set_pulsing(bool on) { pulsing_.store(on); }
   bool pulsing() const { return pulsing_.load(); }
   void set_pulse_rate(float rate) { pulse_rate_.store(std::clamp(rate, 0.1f, 8.0f)); }
@@ -89,6 +109,9 @@ class LEDBlackHole {
   float isco_radius() const;                // Bardeen-Press-Teukolsky ISCO
   float shadow_radius(float azimuth);       // critical-curve radius vs screen angle
   float redshift_factor(float r, float b_impact) const;  // g = nu_obs / nu_emit
+  // Whether an equatorial ray at signed impact parameter b (positive =
+  // prograde) falls in, by the same 3D Kerr-Schild tracer the renderer uses.
+  bool ray_captured(float b_impact) const;
 
   void set_draw_mode(DrawMode mode) { draw_mode_.store(mode); }
   DrawMode draw_mode() const { return draw_mode_.load(); }
@@ -97,38 +120,22 @@ class LEDBlackHole {
   ColorMode color_mode() const { return color_mode_.load(); }
 
  private:
-  // Precomputed per-pixel screen geometry. Depends only on the render size,
-  // zoom and tilt, so it is rebuilt when one of those changes -- never per
-  // frame. The per-pixel loop then does table lookups and arithmetic only.
-  struct ScreenPixel {
-    float nx = 0.0f;
-    float b = -1.0f;   // impact parameter (screen radius); <0 => outside field
-    float phi = 0.0f;  // screen azimuth atan2(ny, nx)
-    float r_front = 0.0f;  // radius where the line of sight meets the disk
-    float theta = 0.0f;    // azimuth of that intersection
-    float ny = 0.0f;       // vertical screen coordinate (near/far side test)
-  };
-
-  static constexpr int kBendTableSize = 256;
   static constexpr int kShadowBins = 128;
-  static constexpr int kDiskRadiusBins = 128;
   static constexpr int kColorLutSize = 256;
 
   void tick();
   float r_isco() const;
-  void build_bend_tables();   // bend + perihelion per impact parameter (spin)
   void build_shadow_table();  // Bardeen critical curve (spin + tilt)
-  void build_disk_tables();   // Omega, u^t, temperature, blackbody LUT (spin)
-  void rebuild_geometry();    // per-pixel screen geometry (size/zoom/tilt)
+  void build_color_lut();     // blackbody ramp, linear light
+  void retrace(int ss);       // per-pixel geodesics (size/zoom/tilt/orbit/spin/lensing)
 
   const int side_;
   const float r_horizon_;
   float r_outer_;
   const float mass_;
-  float b_max_;
 
-  float phase_{0.0f};
-  float pulse_phase_{0.0f};
+  float time_m_{0.0f};  // animation clock, in M, wrapped to a seamless period
+  float beat_phase_{0.0f};
 
   std::atomic<float> spin_{0.85f};
   std::atomic<float> tilt_squash_{0.20f};
@@ -148,33 +155,30 @@ class LEDBlackHole {
   std::atomic<ColorMode> color_mode_{ColorMode::Color};
 
   std::mt19937 rng_;
+  float seed_offset_ = 0.0f;  // shifts the noise so each seed is a new universe
   std::mutex mutex_;
 
-  // Geodesic tables (rebuilt when the spin changes).
-  std::vector<float> bend_pro_;
-  std::vector<float> bend_ret_;
-  std::vector<float> rmin_pro_;
-  std::vector<float> rmin_ret_;
-  std::vector<float> rfar_pro_;  // emission radius of the far-side image
-  std::vector<float> rfar_ret_;
   std::vector<float> shadow_r_;  // critical-curve radius vs screen azimuth
+  std::vector<std::array<float, 3>> color_lut_;
 
-  // Disk emission tables (rebuilt when the spin changes).
-  std::vector<float> omega_lut_;
-  std::vector<float> ut_lut_;
-  std::vector<float> temp_lut_;
-  std::vector<float> emis_lut_;
-  std::vector<std::array<std::uint8_t, 3>> color_lut_;
-  float color_tmin_ = 1000.0f;
-  float color_tmax_ = 12000.0f;
-
-  // Per-pixel screen geometry (rebuilt on size/zoom/tilt change).
-  std::vector<ScreenPixel> geom_;
-  int geom_sub_side_ = 0;
-  float geom_zoom_ = -1.0f;
-  float geom_tilt_ = -1.0f;
-  float geom_orbit_ = 0.0f;
+  // Traced rays, ss x ss per logical pixel (rebuilt on a view change only).
+  std::vector<detail::BlackHoleRay> rays_;
+  int trace_ss_ = 0;
+  float trace_zoom_ = -1.0f;
+  float trace_tilt_ = -1.0f;
+  float trace_orbit_ = 0.0f;
+  float trace_lensing_ = -1.0f;
+  float trace_r_outer_ = -1.0f;
   bool view_dirty_ = true;
+  // While the view is moving, trace one ray per pixel; refine to ss x ss once
+  // it has been still for a moment.
+  bool trace_coarse_ = false;
+  std::chrono::steady_clock::time_point view_changed_at_{};
+
+  // Last shaded frame, RGBA (A = lit). Shading only changes when the clock
+  // ticks or a look setting moves, so repeated renders just redraw it.
+  std::vector<std::array<std::uint8_t, 4>> frame_;
+  std::array<float, 10> shade_key_{};
 
   float time_accumulator_ = 0.0f;
 };
