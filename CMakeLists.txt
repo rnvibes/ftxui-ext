@@ -61,5 +61,13 @@ if(FTXUI_EXT_BUILD_TESTS)
   add_executable(led_black_hole_test tests/led_black_hole_test.cc)
   target_link_libraries(led_black_hole_test PRIVATE ftxui-ext dom component screen)
   add_test(NAME led_black_hole_test COMMAND led_black_hole_test)
+
+  add_executable(vim_navigator_test tests/vim_navigator_test.cc)
+  target_link_libraries(vim_navigator_test PRIVATE ftxui-ext dom component screen)
+  add_test(NAME vim_navigator_test COMMAND vim_navigator_test)
+
+  add_executable(user_text_cursor_test tests/user_text_cursor_test.cc)
+  target_link_libraries(user_text_cursor_test PRIVATE ftxui-ext dom component screen)
+  add_test(NAME user_text_cursor_test COMMAND user_text_cursor_test)
 endif()
 

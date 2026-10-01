@@ -14,14 +14,18 @@ namespace ftxui::ext
     WordForward,
     WordBackward,
     WordEnd,
+    WordEndBackward,  // ge / gE
     ParagraphForward,
     ParagraphBackward,
     LineDown,         // j / ArrowDown
-    LineUp,           // k / ArrowUp
-    LinePageDown,     // PageDown
-    LinePageUp,       // PageUp
-    Home,             // 0 — start of the current line
-    End,              // $ — end of the current line
+    LineUp,           // k / ArrowUp / Ctrl+K
+    LinePageDown,     // PageDown / Ctrl+F
+    LinePageUp,       // PageUp / Ctrl+B
+    HalfPageDown,     // Ctrl+D
+    HalfPageUp,       // Ctrl+U
+    Home,             // 0 / g0 — start of the current line
+    FirstNonBlank,    // ^ / g_ — first non-blank character of line
+    End,              // $ / g$ — end of the current line
     GoDocumentStart,  // gg
     GoDocumentEnd,    // G
     ViewportTop,      // H
@@ -37,14 +41,26 @@ namespace ftxui::ext
     SearchNext,       // n — repeat search forward
     SearchPrevious,   // N — repeat search backward
     Activate,         // Enter / o — open whatever the cursor is on
+    OpenPreview,      // go — preview / silent open (NERDTree / explorer)
+    OpenSplitSilent,  // gi — split silently (NERDTree)
+    OpenVSplitSilent, // gs — vsplit silently (NERDTree)
+    TabNext,          // gt
+    TabPrevious,      // gT
     Elaborate,        // <C-e> — contextual inquiry / follow-up
-    // <C-w>h/j/k/l — move focus between tiles. Vim's window vocabulary, and
-    // the reason Tab is gone: a tiled layout has directions, and a ring does
-    // not, so cycling was always a worse answer to "go left".
-    WindowLeft,
-    WindowDown,
-    WindowUp,
-    WindowRight,
+    Escape,           // Esc (when nothing is pending)
+    // <C-w> window vocabulary
+    WindowLeft,       // <C-w>h / ArrowLeft
+    WindowDown,       // <C-w>j / ArrowDown
+    WindowUp,         // <C-w>k / ArrowUp
+    WindowRight,      // <C-w>l / ArrowRight
+    WindowCycle,      // <C-w>w / <C-w><C-w>
+    WindowCycleBack,  // <C-w>W
+    WindowPrevious,   // <C-w>p
+    WindowClose,      // <C-w>c / <C-w>q
+    WindowSplitHorizontal, // <C-w>s
+    WindowSplitVertical,   // <C-w>v
+    WindowOnly,       // <C-w>o
+    WindowEqualize,   // <C-w>=
   };
 
   struct VimEvent

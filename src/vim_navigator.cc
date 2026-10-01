@@ -66,6 +66,22 @@ namespace ftxui::ext
         return VimEvent{VimAction::WindowUp, 1};
       if (CharIs(event, 'l') || event == ftxui::Event::ArrowRight)
         return VimEvent{VimAction::WindowRight, 1};
+      if (CharIs(event, 'w') || event == ftxui::Event::CtrlW)
+        return VimEvent{VimAction::WindowCycle, 1};
+      if (CharIs(event, 'W'))
+        return VimEvent{VimAction::WindowCycleBack, 1};
+      if (CharIs(event, 'p'))
+        return VimEvent{VimAction::WindowPrevious, 1};
+      if (CharIs(event, 'c') || CharIs(event, 'q'))
+        return VimEvent{VimAction::WindowClose, 1};
+      if (CharIs(event, 's'))
+        return VimEvent{VimAction::WindowSplitHorizontal, 1};
+      if (CharIs(event, 'v'))
+        return VimEvent{VimAction::WindowSplitVertical, 1};
+      if (CharIs(event, 'o'))
+        return VimEvent{VimAction::WindowOnly, 1};
+      if (CharIs(event, '='))
+        return VimEvent{VimAction::WindowEqualize, 1};
       return std::nullopt;
     }
 
@@ -83,7 +99,39 @@ namespace ftxui::ext
 
       if (CharIs(event, 'g'))
         return VimEvent{VimAction::GoDocumentStart, g_count};
+      if (CharIs(event, 'e') || CharIs(event, 'E'))
+        return VimEvent{VimAction::WordEndBackward, g_count};
+      if (CharIs(event, 'o'))
+        return VimEvent{VimAction::OpenPreview, g_count};
+      if (CharIs(event, 'i'))
+        return VimEvent{VimAction::OpenSplitSilent, g_count};
+      if (CharIs(event, 's'))
+        return VimEvent{VimAction::OpenVSplitSilent, g_count};
+      if (CharIs(event, 't'))
+        return VimEvent{VimAction::TabNext, g_count};
+      if (CharIs(event, 'T'))
+        return VimEvent{VimAction::TabPrevious, g_count};
+      if (CharIs(event, 'j') || event == ftxui::Event::ArrowDown)
+        return VimEvent{VimAction::LineDown, g_count};
+      if (CharIs(event, 'k') || event == ftxui::Event::ArrowUp)
+        return VimEvent{VimAction::LineUp, g_count};
+      if (CharIs(event, '0'))
+        return VimEvent{VimAction::Home, 1};
+      if (CharIs(event, '$'))
+        return VimEvent{VimAction::End, 1};
+      if (CharIs(event, '_'))
+        return VimEvent{VimAction::FirstNonBlank, 1};
       return std::nullopt;
+    }
+
+    if (event == ftxui::Event::Escape)
+    {
+      if (pending_count_ > 0 || pending_z_prefix_ || pending_g_prefix_ || pending_ctrl_w_)
+      {
+        ResetPending();
+        return std::nullopt;
+      }
+      return VimEvent{VimAction::Escape, 1};
     }
 
     if (CharIs(event, 'z'))
@@ -111,7 +159,7 @@ namespace ftxui::ext
       const char c = event.character()[0];
       if (c >= '0' && c <= '9')
       {
-        pending_count_ = pending_count_ * 10 + (c - '0');
+        pending_count_ = std::min(pending_count_ * 10 + (c - '0'), 999999);
         return std::nullopt;
       }
     }
@@ -152,15 +200,23 @@ namespace ftxui::ext
     {
       action = VimAction::LineDown;
     }
-    else if (CharIs(event, 'k') || event == ftxui::Event::ArrowUp)
+    else if (CharIs(event, 'k') || event == ftxui::Event::ArrowUp || event == ftxui::Event::CtrlK)
     {
       action = VimAction::LineUp;
     }
-    else if (event == ftxui::Event::PageDown)
+    else if (event == ftxui::Event::CtrlD)
+    {
+      action = VimAction::HalfPageDown;
+    }
+    else if (event == ftxui::Event::CtrlU)
+    {
+      action = VimAction::HalfPageUp;
+    }
+    else if (event == ftxui::Event::PageDown || event == ftxui::Event::CtrlF)
     {
       action = VimAction::LinePageDown;
     }
-    else if (event == ftxui::Event::PageUp)
+    else if (event == ftxui::Event::PageUp || event == ftxui::Event::CtrlB)
     {
       action = VimAction::LinePageUp;
     }
@@ -171,6 +227,10 @@ namespace ftxui::ext
     else if (CharIs(event, '$'))
     {
       action = VimAction::End;
+    }
+    else if (CharIs(event, '^'))
+    {
+      action = VimAction::FirstNonBlank;
     }
     else if (CharIs(event, 'H'))
     {
