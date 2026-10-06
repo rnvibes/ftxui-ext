@@ -29,6 +29,7 @@ add_library(ftxui-ext STATIC
     src/screen_grid.cc
     src/frame_buffer.cc
     src/led_black_hole.cc
+    src/led_hurricane.cc
     src/image_decode.cc
     src/bitmap_view.cc
     src/gif_view.cc
@@ -62,6 +63,10 @@ if(FTXUI_EXT_BUILD_TESTS)
   target_link_libraries(led_black_hole_test PRIVATE ftxui-ext dom component screen)
   add_test(NAME led_black_hole_test COMMAND led_black_hole_test)
 
+  add_executable(led_hurricane_test tests/led_hurricane_test.cc)
+  target_link_libraries(led_hurricane_test PRIVATE ftxui-ext dom component screen)
+  add_test(NAME led_hurricane_test COMMAND led_hurricane_test)
+
   add_executable(vim_navigator_test tests/vim_navigator_test.cc)
   target_link_libraries(vim_navigator_test PRIVATE ftxui-ext dom component screen)
   add_test(NAME vim_navigator_test COMMAND vim_navigator_test)
@@ -70,4 +75,8 @@ if(FTXUI_EXT_BUILD_TESTS)
   target_link_libraries(user_text_cursor_test PRIVATE ftxui-ext dom component screen)
   add_test(NAME user_text_cursor_test COMMAND user_text_cursor_test)
 endif()
+
+add_executable(hurricane apps/hurricane.cc)
+target_link_libraries(hurricane PRIVATE ftxui-ext dom component screen)
+
 

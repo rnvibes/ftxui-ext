@@ -39,10 +39,13 @@ enum class DrawMode {
   Mixed,
 };
 
+#ifndef FTXUI_EXT_COLOR_MODE_DEFINED
+#define FTXUI_EXT_COLOR_MODE_DEFINED
 enum class ColorMode {
   Monochrome,
   Color,
 };
+#endif
 
 class LEDBlackHole {
  public:
